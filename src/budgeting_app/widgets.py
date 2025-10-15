@@ -56,9 +56,21 @@ class CurrencyEntry(LabeledEntry):
 class Table(ttk.Frame):
     """A styled Treeview with scrollbars."""
 
-    def __init__(self, master: tk.Widget, *, columns: tuple[str, ...], headings: dict[str, str]) -> None:
+    def __init__(
+        self,
+        master: tk.Widget,
+        *,
+        columns: tuple[str, ...],
+        headings: dict[str, str],
+        selectmode: str = "browse",
+    ) -> None:
         super().__init__(master)
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(
+            self,
+            columns=columns,
+            show="headings",
+            selectmode=selectmode,
+        )
         for column in columns:
             self.tree.heading(column, text=headings[column])
             anchor = "e" if column in {"planned", "actual", "difference", "amount"} else "w"

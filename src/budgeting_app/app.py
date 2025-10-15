@@ -174,6 +174,7 @@ class BudgetApp(tk.Tk):
                 "category": "Category",
                 "amount": "Amount",
             },
+            selectmode="extended",
         )
         self.transaction_table.grid(row=2, column=0, sticky="nsew")
         transactions_frame.rowconfigure(2, weight=1)
@@ -280,11 +281,12 @@ class BudgetApp(tk.Tk):
         if not category_id:
             messagebox.showerror("Unknown Category", "Select a valid category.")
             return
-        transaction_id = selected[0]
         try:
-            self.viewmodel.set_transaction_category(transaction_id, category_id)
-            self.assign_category_input.set("")
-            self._set_status("Transaction category updated.")
+            self.viewmodel.set_transactions_category(selected, category_id)
+            self.transaction_table.tree.selection_set(())
+            count = len(selected)
+            label = "transaction" if count == 1 else "transactions"
+            self._set_status(f"Assigned category to {count} {label}.")
         except KeyError as exc:  # noqa: BLE001
             messagebox.showerror("Error", str(exc))
 

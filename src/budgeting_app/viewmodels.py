@@ -100,16 +100,32 @@ class BudgetViewModel:
         self.ledger.recalculate_actuals()
         self._notify()
 
-    def set_transaction_category(self, transaction_id: str, category_id: str) -> None:
+    def set_transactions_category(
+        self, transaction_ids: Iterable[str], category_id: str
+    ) -> None:
         if category_id not in self.ledger.categories:
             raise KeyError(f"Unknown category id '{category_id}'")
+
+        transaction_ids = list(transaction_ids)
+        if not transaction_ids:
+            return
+
+        id_set = set(transaction_ids)
+        updated = False
         for txn in self.ledger.transactions:
-            if txn.transaction_id == transaction_id:
+            if txn.transaction_id in id_set:
                 txn.category_id = category_id
-                self.ledger.recalculate_actuals()
-                self._notify()
-                return
-        raise KeyError(f"Unknown transaction id '{transaction_id}'")
+                updated = True
+
+        if not updated:
+            missing = ", ".join(sorted(id_set))
+            raise KeyError(f"Unknown transaction id '{missing}'")
+
+        self.ledger.recalculate_actuals()
+        self._notify()
+
+    def set_transaction_category(self, transaction_id: str, category_id: str) -> None:
+        self.set_transactions_category([transaction_id], category_id)
 
     def transactions_for_table(self) -> Iterable[dict[str, str]]:
         """Return transaction data shaped for display tables."""
