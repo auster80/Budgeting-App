@@ -23,6 +23,7 @@ class BudgetViewModel:
         self.ledger: BudgetLedger = BudgetLedger()
         self._listeners: List[ChangeListener] = []
         self._classifier = TransactionClassifier()
+        self._ai_log: List[str] = []
 
     # ------------------------------------------------------------------ #
     # Persistence
@@ -150,9 +151,12 @@ class BudgetViewModel:
     # ------------------------------------------------------------------ #
     # AI assisted categorisation
     # ------------------------------------------------------------------ #
-    def suggest_categories_for_unassigned(self) -> dict[str, str]:
+    def suggest_categories_for_unassigned(
+        self, *, logger: Optional[Callable[[str], None]] = None
+    ) -> dict[str, str]:
         """Return AI category suggestions for unassigned transactions."""
 
+        log = logger or self._append_ai_log
         existing_names = [category.name for category in self.ledger.categories.values()]
         categorized_examples: list[tuple[Transaction, str]] = []
         for txn in self.ledger.transactions:
@@ -163,18 +167,38 @@ class BudgetViewModel:
                 continue
             categorized_examples.append((txn, category.name))
 
+        unassigned = [txn for txn in self.ledger.transactions if not txn.category_id]
+        if not unassigned:
+            log("No unassigned transactions to classify.")
+            return {}
+
+        log(
+            f"Attempting to classify {len(unassigned)} unassigned "
+            f"transaction{'s' if len(unassigned) != 1 else ''}."
+        )
+
         suggestions: dict[str, str] = {}
-        for txn in self.ledger.transactions:
-            if txn.category_id:
-                continue
+        for txn in unassigned:
+            txn_label = txn.description or txn.transaction_id or "(unnamed)"
+            log(f"Requesting suggestion for '{txn_label}'.")
+
+            def txn_logger(message: str, *, txn_id: str = txn.transaction_id) -> None:
+                log(f"[{txn_id}] {message}")
+
             result = self._classifier.suggest_category(
                 txn,
                 existing_names,
                 categorized_examples,
+                logger=txn_logger,
             )
             if result is None:
+                log(f"No suggestion produced for '{txn_label}'.")
                 continue
             suggestions[txn.transaction_id] = result.category_name
+            log(
+                f"Accepted suggestion '{result.category_name}' for "
+                f"transaction '{txn_label}'."
+            )
         return suggestions
 
     def accept_ai_suggestion(self, transaction_id: str, category_name: str) -> bool:
@@ -197,6 +221,24 @@ class BudgetViewModel:
 
         self.set_transaction_category(transaction_id, category_id)
         return created
+
+    # ------------------------------------------------------------------ #
+    # AI log helpers
+    # ------------------------------------------------------------------ #
+    def clear_ai_log(self) -> None:
+        self._ai_log.clear()
+
+    def get_ai_log(self) -> List[str]:
+        return list(self._ai_log)
+
+    def add_ai_log_entry(self, message: str) -> None:
+        self._append_ai_log(message)
+
+    def _append_ai_log(self, message: str) -> None:
+        self._ai_log.append(message)
+        # Keep the log to a sensible size for the UI widget.
+        if len(self._ai_log) > 500:
+            self._ai_log = self._ai_log[-500:]
 
     # ------------------------------------------------------------------ #
     # Utility helpers

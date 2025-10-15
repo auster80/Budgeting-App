@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .viewmodels import BudgetViewModel
 from .widgets import CurrencyEntry, LabeledEntry, Table
@@ -23,6 +23,7 @@ class BudgetApp(tk.Tk):
         self.status_var = tk.StringVar(value="Ready")
         self.ai_active = False
         self.ai_suggestions: dict[str, str] = {}
+        self.ai_log_visible = False
 
         self._configure_styles()
         self._build_menu()
@@ -224,11 +225,36 @@ class BudgetApp(tk.Tk):
         )
         self.ai_stop_button.grid(row=1, column=2, sticky="ew", pady=(6, 0))
 
+        self.ai_log_button = ttk.Button(
+            assign_frame,
+            text="Show AI Log",
+            command=self._toggle_ai_log,
+        )
+        self.ai_log_button.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+
+        self.ai_log_frame = ttk.Labelframe(
+            transactions_frame,
+            text="AI Classification Log",
+            style="Card.TLabelframe",
+        )
+        self.ai_log_frame.grid(row=4, column=0, sticky="nsew", pady=(6, 0))
+        self.ai_log_frame.columnconfigure(0, weight=1)
+        self.ai_log_text = scrolledtext.ScrolledText(
+            self.ai_log_frame,
+            height=10,
+            wrap="word",
+            state="disabled",
+            font=("Consolas", 10),
+        )
+        self.ai_log_text.grid(row=0, column=0, sticky="nsew")
+        self.ai_log_frame.rowconfigure(0, weight=1)
+        self.ai_log_frame.grid_remove()
+
         ttk.Button(
             transactions_frame,
             text="Delete Selected Transaction",
             command=self._handle_delete_transaction,
-        ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        ).grid(row=5, column=0, sticky="ew", pady=(6, 0))
 
         status_bar = ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(12, 4))
         status_bar.pack(fill="x", side="bottom")
@@ -330,6 +356,9 @@ class BudgetApp(tk.Tk):
         self.ai_start_button.configure(state="disabled")
         self.ai_stop_button.configure(state="normal")
         self._set_status("AI classification started.")
+        self.viewmodel.clear_ai_log()
+        self.viewmodel.add_ai_log_entry("AI classification started by user.")
+        self._refresh_ai_log()
         self._on_data_changed(self.viewmodel.ledger)
 
     def _stop_ai_classification(self) -> None:
@@ -340,6 +369,8 @@ class BudgetApp(tk.Tk):
         self.ai_start_button.configure(state="normal")
         self.ai_stop_button.configure(state="disabled")
         self._on_data_changed(self.viewmodel.ledger)
+        self.viewmodel.add_ai_log_entry("AI classification stopped by user.")
+        self._refresh_ai_log()
         self._set_status("AI classification stopped.")
 
     def _handle_transaction_click(self, event) -> None:
@@ -441,6 +472,7 @@ class BudgetApp(tk.Tk):
         self.txn_category_input.configure(values=list(self.category_lookup.keys()))
         self.assign_category_input.configure(values=list(self.category_lookup.keys()))
         self._set_status("Budget data loaded.")
+        self._refresh_ai_log()
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
@@ -465,6 +497,28 @@ class BudgetApp(tk.Tk):
 
     def _set_status(self, message: str) -> None:
         self.status_var.set(message)
+
+    def _toggle_ai_log(self) -> None:
+        self.ai_log_visible = not self.ai_log_visible
+        if self.ai_log_visible:
+            self.ai_log_frame.grid()
+            self.ai_log_button.configure(text="Hide AI Log")
+            self._refresh_ai_log()
+        else:
+            self.ai_log_frame.grid_remove()
+            self.ai_log_button.configure(text="Show AI Log")
+
+    def _refresh_ai_log(self) -> None:
+        if not hasattr(self, "ai_log_text"):
+            return
+        entries = self.viewmodel.get_ai_log()
+        self.ai_log_text.configure(state="normal")
+        self.ai_log_text.delete("1.0", tk.END)
+        if entries:
+            self.ai_log_text.insert("1.0", "\n".join(entries) + "\n")
+        self.ai_log_text.configure(state="disabled")
+        if self.ai_log_visible:
+            self.ai_log_text.see(tk.END)
 
 def run_app(data_file: str | None = None) -> None:
     """Convenience helper to start the Tkinter loop."""

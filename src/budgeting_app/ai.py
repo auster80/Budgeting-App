@@ -6,7 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 from .models import Transaction
 
@@ -57,26 +57,41 @@ class TransactionClassifier:
         transaction: Transaction,
         existing_categories: Iterable[str],
         categorized_examples: Sequence[Tuple[Transaction, str]],
+        *,
+        logger: Optional[Callable[[str], None]] = None,
     ) -> Optional[ClassificationResult]:
         """Return a likely category for the transaction if one can be inferred."""
 
         categories = list(existing_categories)
         examples = list(categorized_examples)
+        if logger:
+            txn_label = transaction.description or transaction.transaction_id or "(unnamed)"
+            logger(f"Classifying transaction '{txn_label}'.")
         if not categories and not examples:
+            if logger:
+                logger(
+                    "Skipping classification: no existing categories or labelled examples available."
+                )
             return None
 
         self._update_memory(examples)
 
         normalised_key = self._normalise_transaction(transaction)
         if normalised_key and normalised_key in self._memory:
+            if logger:
+                logger("Using memoised classification for recurring transaction.")
             return self._memory[normalised_key]
 
         if not self._client:
             # No API client configured; we can still benefit from memoised feedback.
+            if logger:
+                logger("OpenAI client is not configured; unable to query model.")
             return None
 
         prompt = self._build_prompt(transaction, categories, examples)
         try:
+            if logger:
+                logger(f"Requesting classification from model '{self.model}'.")
             response = self._client.chat.completions.create(  # type: ignore[call-arg]
                 model=self.model,
                 temperature=self.temperature,
@@ -92,16 +107,30 @@ class TransactionClassifier:
                     {"role": "user", "content": prompt},
                 ],
             )
-        except (_APIError, _OpenAIError):  # pragma: no cover - network failure path
+        except (_APIError, _OpenAIError) as exc:  # pragma: no cover - network failure path
+            if logger:
+                logger(f"OpenAI API error: {exc}")
             return None
 
         content = self._extract_message_content(response)
         if not content:
+            if logger:
+                logger("Model response did not contain any content.")
             return None
 
         result = self._parse_response(content)
         if result and normalised_key:
             self._memory[normalised_key] = result
+        if not result:
+            if logger:
+                logger("Failed to parse a valid classification result from the model response.")
+            return None
+        if logger:
+            logger(
+                "Model suggested category '{name}' with confidence {confidence:.2f}.".format(
+                    name=result.category_name, confidence=result.confidence
+                )
+            )
         return result
 
     # ------------------------------------------------------------------ #
