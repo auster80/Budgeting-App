@@ -85,8 +85,24 @@ class TransactionClassifier:
         if not self._client:
             # No API client configured; we can still benefit from memoised feedback.
             if logger:
-                logger("OpenAI client is not configured; unable to query model.")
-            return None
+                logger(
+                    "OpenAI client is not configured; using heuristic fallback classifier."
+                )
+            fallback = self._heuristic_classification(
+                transaction,
+                categories,
+                examples,
+                normalised_key=normalised_key,
+                logger=logger,
+            )
+            if fallback and logger:
+                logger(
+                    "Heuristic engine suggested category '{name}' with confidence "
+                    "{confidence:.2f}.".format(
+                        name=fallback.category_name, confidence=fallback.confidence
+                    )
+                )
+            return fallback
 
         prompt = self._build_prompt(transaction, categories, examples)
         try:
@@ -110,13 +126,25 @@ class TransactionClassifier:
         except (_APIError, _OpenAIError) as exc:  # pragma: no cover - network failure path
             if logger:
                 logger(f"OpenAI API error: {exc}")
-            return None
+            return self._heuristic_classification(
+                transaction,
+                categories,
+                examples,
+                normalised_key=normalised_key,
+                logger=logger,
+            )
 
         content = self._extract_message_content(response)
         if not content:
             if logger:
                 logger("Model response did not contain any content.")
-            return None
+            return self._heuristic_classification(
+                transaction,
+                categories,
+                examples,
+                normalised_key=normalised_key,
+                logger=logger,
+            )
 
         result = self._parse_response(content)
         if result and normalised_key:
@@ -124,7 +152,13 @@ class TransactionClassifier:
         if not result:
             if logger:
                 logger("Failed to parse a valid classification result from the model response.")
-            return None
+            return self._heuristic_classification(
+                transaction,
+                categories,
+                examples,
+                normalised_key=normalised_key,
+                logger=logger,
+            )
         if logger:
             logger(
                 "Model suggested category '{name}' with confidence {confidence:.2f}.".format(
@@ -156,6 +190,149 @@ class TransactionClassifier:
             key = self._normalise_transaction(txn)
             if key and category_name:
                 self._memory[key] = ClassificationResult(category_name, 0.99)
+
+    def _heuristic_classification(
+        self,
+        transaction: Transaction,
+        existing_categories: Sequence[str],
+        examples: Sequence[Tuple[Transaction, str]],
+        *,
+        normalised_key: str | None,
+        logger: Optional[Callable[[str], None]] = None,
+    ) -> Optional[ClassificationResult]:
+        """Best-effort categorisation when ChatGPT is unavailable or unreliable."""
+
+        result = self._match_from_examples(transaction, examples)
+        if result:
+            if normalised_key:
+                self._memory[normalised_key] = result
+            if logger:
+                logger("Reused label from prior similar transaction.")
+            return result
+
+        result = self._match_from_keywords(transaction, existing_categories)
+        if result:
+            if normalised_key:
+                self._memory[normalised_key] = result
+            if logger:
+                logger("Derived category from keyword heuristics.")
+            return result
+
+        if logger:
+            logger("Heuristic engine could not determine a category.")
+        return None
+
+    def _match_from_examples(
+        self, transaction: Transaction, examples: Sequence[Tuple[Transaction, str]]
+    ) -> Optional[ClassificationResult]:
+        """Look for similar, previously categorised transactions."""
+
+        if not examples:
+            return None
+
+        transaction_tokens = self._tokenise_transaction(transaction)
+        if not transaction_tokens:
+            return None
+
+        for example_txn, category_name in reversed(examples[-self.max_feedback_examples :]):
+            example_tokens = self._tokenise_transaction(example_txn)
+            if not example_tokens:
+                continue
+            if transaction_tokens & example_tokens:
+                confidence = 0.85 if transaction.description == example_txn.description else 0.7
+                return ClassificationResult(category_name, confidence)
+        return None
+
+    def _match_from_keywords(
+        self, transaction: Transaction, existing_categories: Sequence[str]
+    ) -> Optional[ClassificationResult]:
+        """Apply keyword heuristics derived from publicly available data."""
+
+        keyword_map: dict[str, str] = {
+            "grocery": "Groceries",
+            "supermarket": "Groceries",
+            "aldi": "Groceries",
+            "lidl": "Groceries",
+            "tesco": "Groceries",
+            "rent": "Rent",
+            "mortgage": "Housing",
+            "uber": "Transport",
+            "lyft": "Transport",
+            "taxi": "Transport",
+            "fuel": "Auto & Transport",
+            "petrol": "Auto & Transport",
+            "shell": "Auto & Transport",
+            "bp": "Auto & Transport",
+            "starbucks": "Dining",
+            "coffee": "Dining",
+            "restaurant": "Dining",
+            "dining": "Dining",
+            "salary": "Income",
+            "payroll": "Income",
+            "bonus": "Income",
+            "electric": "Utilities",
+            "internet": "Utilities",
+            "broadband": "Utilities",
+            "water": "Utilities",
+            "insurance": "Insurance",
+            "pharmacy": "Healthcare",
+            "chemist": "Healthcare",
+            "gym": "Health & Fitness",
+            "fitness": "Health & Fitness",
+        }
+
+        resolved_keywords = {key: self._resolve_category_name(value, existing_categories) for key, value in keyword_map.items()}
+
+        text = " ".join(
+            part
+            for part in [
+                transaction.description,
+                transaction.counterparty,
+                transaction.reference,
+            ]
+            if part
+        ).lower()
+        if not text:
+            return None
+
+        for keyword, category_name in resolved_keywords.items():
+            if keyword in text:
+                return ClassificationResult(category_name, 0.6)
+        return None
+
+    def _resolve_category_name(
+        self, suggestion: str, existing_categories: Sequence[str]
+    ) -> str:
+        """Adjust a heuristic suggestion to match an existing category name."""
+
+        suggestion_lower = suggestion.lower()
+        for name in existing_categories:
+            if name.lower() == suggestion_lower:
+                return name
+        for name in existing_categories:
+            lowered = name.lower()
+            if suggestion_lower in lowered or lowered in suggestion_lower:
+                return name
+        return suggestion
+
+    @staticmethod
+    def _tokenise_transaction(transaction: Transaction) -> set[str]:
+        """Create a set of lowercase keywords representing a transaction."""
+
+        text = " ".join(
+            part
+            for part in [
+                transaction.description,
+                transaction.counterparty,
+                transaction.account_name,
+                transaction.reference,
+            ]
+            if part
+        ).lower()
+        if not text:
+            return set()
+        tokens = re.split(r"[^a-z0-9]+", text)
+        return {token for token in tokens if token}
 
     def _build_prompt(
         self,
