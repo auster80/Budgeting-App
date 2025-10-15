@@ -22,6 +22,7 @@ class BudgetApp(tk.Tk):
         self.category_lookup: dict[str, str] = {}
         self.category_name_by_id: dict[str, str] = {}
         self.status_var = tk.StringVar(value="Ready")
+        self._category_context_target: str | None = None
 
         self._configure_styles()
         self._build_menu()
@@ -123,6 +124,15 @@ class BudgetApp(tk.Tk):
         self.category_table.grid(row=1, column=0, sticky="nsew")
         categories_frame.rowconfigure(1, weight=1)
         self.category_table.tree.bind("<<TreeviewSelect>>", self._handle_category_selection)
+        self.category_table.tree.bind("<Button-3>", self._show_category_context_menu)
+        self.category_table.tree.bind(
+            "<Control-Button-1>", self._show_category_context_menu
+        )  # macOS secondary click
+
+        self.category_context_menu = tk.Menu(self, tearoff=0)
+        self.category_context_menu.add_command(
+            label="Edit Category", command=self._handle_edit_category
+        )
 
         ttk.Button(
             categories_frame,
@@ -228,6 +238,48 @@ class BudgetApp(tk.Tk):
         if messagebox.askyesno("Delete Category", "Delete the selected category?"):
             self.viewmodel.delete_category(category_id)
             self._set_status("Category deleted.")
+
+    def _handle_edit_category(self) -> None:
+        category_id = self._category_context_target
+        self._category_context_target = None
+        if not category_id:
+            selected = self.category_table.tree.selection()
+            if not selected:
+                messagebox.showinfo("Select Category", "Select a category to edit.")
+                return
+            category_id = selected[0]
+
+        if category_id not in self.category_name_by_id:
+            messagebox.showerror("Unknown Category", "The selected category was not found.")
+            return
+
+        item = self.category_table.tree.item(category_id)
+        values = item.get("values", [])
+        if len(values) < 2:
+            messagebox.showerror("Error", "Unable to load category details for editing.")
+            return
+
+        dialog = CategoryEditDialog(
+            self,
+            name=str(values[0]),
+            planned_amount=str(values[1]),
+        )
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        name, planned = dialog.result
+        try:
+            self.viewmodel.update_category(
+                category_id, name=name, planned_amount=planned or "0"
+            )
+            self._set_status(f"Updated category '{name}'.")
+        except ValueError:
+            messagebox.showerror("Invalid Amount", "Planned amount must be numeric.")
+        except KeyError:
+            messagebox.showerror(
+                "Unknown Category", "The selected category was not found."
+            )
 
     def _handle_add_transaction(self) -> None:
         description = self.txn_description_input.get().strip()
@@ -377,6 +429,64 @@ class BudgetApp(tk.Tk):
 
     def _set_status(self, message: str) -> None:
         self.status_var.set(message)
+
+    def _show_category_context_menu(self, event) -> None:
+        row_id = self.category_table.tree.identify_row(event.y)
+        if not row_id:
+            return
+        self.category_table.tree.selection_set(row_id)
+        self.category_table.tree.focus(row_id)
+        self._category_context_target = row_id
+        try:
+            self.category_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.category_context_menu.grab_release()
+
+
+class CategoryEditDialog(tk.Toplevel):
+    """Modal dialog for editing a budget category."""
+
+    def __init__(self, master: tk.Widget, *, name: str, planned_amount: str) -> None:
+        super().__init__(master)
+        self.title("Edit Category")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+        self.result: tuple[str, str] | None = None
+
+        frame = ttk.Frame(self, padding=12)
+        frame.grid(row=0, column=0, sticky="nsew")
+
+        self.name_input = LabeledEntry(frame, label="Name")
+        self.name_input.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.name_input.set(name)
+        self.name_input.focus_set()
+
+        self.plan_input = CurrencyEntry(frame, label="Planned Amount")
+        self.plan_input.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.plan_input.set(planned_amount)
+
+        button_frame = ttk.Frame(frame)
+        button_frame.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+        ttk.Button(button_frame, text="Cancel", command=self.destroy).grid(
+            row=0, column=0, padx=(0, 6)
+        )
+        ttk.Button(button_frame, text="Save", command=self._save).grid(
+            row=0, column=1
+        )
+
+        self.columnconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+    def _save(self) -> None:
+        name = self.name_input.get().strip()
+        planned = self.plan_input.get().strip()
+        if not name:
+            messagebox.showinfo("Missing Data", "Please provide a category name.")
+            return
+        self.result = (name, planned)
+        self.destroy()
 
 def run_app(data_file: str | None = None) -> None:
     """Convenience helper to start the Tkinter loop."""
