@@ -54,6 +54,19 @@ class BudgetViewModel:
         self.ledger.remove_category(category_id)
         self._notify()
 
+    def update_category(
+        self,
+        category_id: str,
+        *,
+        name: str | None = None,
+        planned_amount: str | float | Decimal | None = None,
+    ) -> BudgetCategory:
+        category = self.ledger.update_category(
+            category_id, name=name, planned_amount=planned_amount
+        )
+        self._notify()
+        return category
+
     def categories_for_table(self) -> Iterable[dict[str, str]]:
         """Return category data shaped for display tables."""
         for category in self.ledger.categories.values():
