@@ -152,11 +152,17 @@ class BudgetViewModel:
     # AI assisted categorisation
     # ------------------------------------------------------------------ #
     def suggest_categories_for_unassigned(
-        self, *, logger: Optional[Callable[[str], None]] = None
+        self,
+        *,
+        logger: Optional[Callable[[str], None]] = None,
+        should_abort: Optional[Callable[[], bool]] = None,
     ) -> dict[str, str]:
         """Return AI category suggestions for unassigned transactions."""
 
         log = logger or self._append_ai_log
+        if should_abort and should_abort():
+            log("AI classification cancelled before starting.")
+            return {}
         existing_names = [category.name for category in self.ledger.categories.values()]
         categorized_examples: list[tuple[Transaction, str]] = []
         for txn in self.ledger.transactions:
@@ -179,6 +185,9 @@ class BudgetViewModel:
 
         suggestions: dict[str, str] = {}
         for txn in unassigned:
+            if should_abort and should_abort():
+                log("AI classification cancelled.")
+                break
             txn_label = txn.description or txn.transaction_id or "(unnamed)"
             log(f"Requesting suggestion for '{txn_label}'.")
 
@@ -191,6 +200,9 @@ class BudgetViewModel:
                 categorized_examples,
                 logger=txn_logger,
             )
+            if should_abort and should_abort():
+                log("AI classification cancelled.")
+                break
             if result is None:
                 log(f"No suggestion produced for '{txn_label}'.")
                 continue

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -24,6 +25,10 @@ class BudgetApp(tk.Tk):
         self.ai_active = False
         self.ai_suggestions: dict[str, str] = {}
         self.ai_log_visible = False
+        self._ai_worker_thread: threading.Thread | None = None
+        self._ai_stop_event: threading.Event | None = None
+        self._ai_refresh_pending = False
+        self._suspend_ai_refresh = False
 
         self._configure_styles()
         self._build_menu()
@@ -359,7 +364,7 @@ class BudgetApp(tk.Tk):
         self.viewmodel.clear_ai_log()
         self.viewmodel.add_ai_log_entry("AI classification started by user.")
         self._refresh_ai_log()
-        self._on_data_changed(self.viewmodel.ledger)
+        self._request_ai_refresh()
 
     def _stop_ai_classification(self) -> None:
         if not self.ai_active:
@@ -368,6 +373,13 @@ class BudgetApp(tk.Tk):
         self.ai_suggestions.clear()
         self.ai_start_button.configure(state="normal")
         self.ai_stop_button.configure(state="disabled")
+        if self._ai_stop_event:
+            self._ai_stop_event.set()
+        if self._ai_worker_thread and self._ai_worker_thread.is_alive():
+            self._ai_worker_thread.join(timeout=1.0)
+        self._ai_worker_thread = None
+        self._ai_stop_event = None
+        self._ai_refresh_pending = False
         self._on_data_changed(self.viewmodel.ledger)
         self.viewmodel.add_ai_log_entry("AI classification stopped by user.")
         self._refresh_ai_log()
@@ -411,6 +423,7 @@ class BudgetApp(tk.Tk):
             )
         else:
             self._set_status(f"Assigned suggested category '{category_name}'.")
+        self.ai_suggestions.pop(transaction_id, None)
 
     def _handle_import_csv(self) -> None:
         file_path = filedialog.askopenfilename(
@@ -449,10 +462,11 @@ class BudgetApp(tk.Tk):
         categories = list(self.viewmodel.categories_for_table())
         transactions = list(self.viewmodel.transactions_for_table())
 
-        if self.ai_active:
-            self.ai_suggestions = self.viewmodel.suggest_categories_for_unassigned()
-        else:
+        if not self.ai_active:
             self.ai_suggestions = {}
+        elif not self._suspend_ai_refresh:
+            self._request_ai_refresh()
+        self._suspend_ai_refresh = False
 
         self.category_table.populate(categories, key_field="category_id")
         for row in transactions:
@@ -519,6 +533,63 @@ class BudgetApp(tk.Tk):
         self.ai_log_text.configure(state="disabled")
         if self.ai_log_visible:
             self.ai_log_text.see(tk.END)
+
+    def _request_ai_refresh(self) -> None:
+        if not self.ai_active:
+            return
+        self._ai_refresh_pending = True
+        if not self._ai_worker_thread or not self._ai_worker_thread.is_alive():
+            self._launch_ai_worker()
+
+    def _launch_ai_worker(self) -> None:
+        if not self.ai_active or not self._ai_refresh_pending:
+            return
+        stop_event = threading.Event()
+        self._ai_stop_event = stop_event
+        self._ai_refresh_pending = False
+
+        def worker() -> None:
+            def log_message(message: str) -> None:
+                self.viewmodel.add_ai_log_entry(message)
+                self.after(0, self._refresh_ai_log)
+
+            def should_abort() -> bool:
+                return stop_event.is_set() or not self.ai_active
+
+            try:
+                suggestions = self.viewmodel.suggest_categories_for_unassigned(
+                    logger=log_message,
+                    should_abort=should_abort,
+                )
+            except Exception as exc:  # noqa: BLE001 - surface unexpected failures
+                self.viewmodel.add_ai_log_entry(f"AI classification error: {exc}")
+                suggestions = {}
+            finally:
+                self.after(0, self._refresh_ai_log)
+
+            if should_abort():
+                self.after(0, lambda: self._on_ai_worker_finished({}, stop_event))
+                return
+
+            self.after(0, lambda: self._on_ai_worker_finished(suggestions, stop_event))
+
+        thread = threading.Thread(target=worker, daemon=True)
+        self._ai_worker_thread = thread
+        thread.start()
+
+    def _on_ai_worker_finished(
+        self, suggestions: dict[str, str], stop_event: threading.Event
+    ) -> None:
+        if self._ai_stop_event is stop_event and self.ai_active:
+            self.ai_suggestions = suggestions
+            self._suspend_ai_refresh = True
+            self._on_data_changed(self.viewmodel.ledger)
+
+        if self._ai_stop_event is stop_event:
+            self._ai_worker_thread = None
+            self._ai_stop_event = None
+            if self.ai_active and self._ai_refresh_pending:
+                self._launch_ai_worker()
 
 def run_app(data_file: str | None = None) -> None:
     """Convenience helper to start the Tkinter loop."""
