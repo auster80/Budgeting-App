@@ -20,6 +20,7 @@ class BudgetApp(tk.Tk):
         self.resizable(True, True)
         self.viewmodel = viewmodel
         self.category_lookup: dict[str, str] = {}
+        self.category_name_by_id: dict[str, str] = {}
         self.status_var = tk.StringVar(value="Ready")
 
         self._configure_styles()
@@ -121,6 +122,7 @@ class BudgetApp(tk.Tk):
         )
         self.category_table.grid(row=1, column=0, sticky="nsew")
         categories_frame.rowconfigure(1, weight=1)
+        self.category_table.tree.bind("<<TreeviewSelect>>", self._handle_category_selection)
 
         ttk.Button(
             categories_frame,
@@ -337,9 +339,20 @@ class BudgetApp(tk.Tk):
         self.remaining_total_var.set(f"{(planned_total - actual_total):.2f}")
 
         self.category_lookup = {row["name"]: row["category_id"] for row in categories}
+        self.category_name_by_id = {row["category_id"]: row["name"] for row in categories}
         self.txn_category_input.configure(values=list(self.category_lookup.keys()))
         self.assign_category_input.configure(values=list(self.category_lookup.keys()))
         self._set_status("Budget data loaded.")
+
+    def _handle_category_selection(self, _event) -> None:
+        selected = self.category_table.tree.selection()
+        if not selected:
+            return
+        category_id = selected[0]
+        category_name = self.category_name_by_id.get(category_id)
+        if not category_name:
+            return
+        self.assign_category_input.set(category_name)
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
