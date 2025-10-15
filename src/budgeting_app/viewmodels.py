@@ -154,11 +154,24 @@ class BudgetViewModel:
         """Return AI category suggestions for unassigned transactions."""
 
         existing_names = [category.name for category in self.ledger.categories.values()]
+        categorized_examples: list[tuple[Transaction, str]] = []
+        for txn in self.ledger.transactions:
+            if not txn.category_id:
+                continue
+            category = self.ledger.categories.get(txn.category_id)
+            if not category:
+                continue
+            categorized_examples.append((txn, category.name))
+
         suggestions: dict[str, str] = {}
         for txn in self.ledger.transactions:
             if txn.category_id:
                 continue
-            result = self._classifier.suggest_category(txn, existing_names)
+            result = self._classifier.suggest_category(
+                txn,
+                existing_names,
+                categorized_examples,
+            )
             if result is None:
                 continue
             suggestions[txn.transaction_id] = result.category_name
