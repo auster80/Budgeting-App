@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import tkinter as tk
+from typing import Any, Mapping
+
 from tkinter import ttk
 
 
@@ -63,6 +65,7 @@ class Table(ttk.Frame):
         columns: tuple[str, ...],
         headings: dict[str, str],
         selectmode: str = "browse",
+        column_options: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         super().__init__(master)
         self.tree = ttk.Treeview(
@@ -71,10 +74,14 @@ class Table(ttk.Frame):
             show="headings",
             selectmode=selectmode,
         )
+        column_options = column_options or {}
         for column in columns:
             self.tree.heading(column, text=headings[column])
             anchor = "e" if column in {"planned", "actual", "difference", "amount"} else "w"
-            self.tree.column(column, anchor=anchor, stretch=True)
+            options = dict(column_options.get(column, {}))
+            anchor = options.pop("anchor", anchor)
+            stretch = options.pop("stretch", True)
+            self.tree.column(column, anchor=anchor, stretch=stretch, **options)
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -87,7 +94,7 @@ class Table(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             item_id = row.get(key_field, "")
-            values = [row[column] for column in self.tree["columns"]]
+            values = [row.get(column, "") for column in self.tree["columns"]]
             self.tree.insert("", "end", iid=item_id, values=values)
 
     def bind_double_click(self, callback) -> None:

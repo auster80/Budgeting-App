@@ -21,6 +21,8 @@ class BudgetApp(tk.Tk):
         self.viewmodel = viewmodel
         self.category_lookup: dict[str, str] = {}
         self.status_var = tk.StringVar(value="Ready")
+        self.ai_active = False
+        self.ai_suggestions: dict[str, str] = {}
 
         self._configure_styles()
         self._build_menu()
@@ -166,17 +168,33 @@ class BudgetApp(tk.Tk):
 
         self.transaction_table = Table(
             transactions_frame,
-            columns=("occurred_on", "description", "account", "category", "amount"),
+            columns=(
+                "occurred_on",
+                "description",
+                "account",
+                "category",
+                "amount",
+                "suggestion",
+                "apply",
+            ),
             headings={
                 "occurred_on": "Date",
                 "description": "Description",
                 "account": "Account",
                 "category": "Category",
                 "amount": "Amount",
+                "suggestion": "AI Suggestion",
+                "apply": "",
             },
             selectmode="extended",
+            column_options={
+                "amount": {"width": 100, "anchor": "e", "stretch": False},
+                "apply": {"width": 60, "anchor": "center", "stretch": False},
+                "suggestion": {"width": 160},
+            },
         )
         self.transaction_table.grid(row=2, column=0, sticky="nsew")
+        self.transaction_table.tree.bind("<ButtonRelease-1>", self._handle_transaction_click)
         transactions_frame.rowconfigure(2, weight=1)
 
         assign_frame = ttk.Frame(transactions_frame)
@@ -190,6 +208,21 @@ class BudgetApp(tk.Tk):
             text="Assign",
             command=self._handle_assign_transaction_category,
         ).grid(row=0, column=2)
+
+        self.ai_start_button = ttk.Button(
+            assign_frame,
+            text="Start AI Categorisation",
+            command=self._start_ai_classification,
+        )
+        self.ai_start_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        self.ai_stop_button = ttk.Button(
+            assign_frame,
+            text="Stop AI Categorisation",
+            command=self._stop_ai_classification,
+            state="disabled",
+        )
+        self.ai_stop_button.grid(row=1, column=2, sticky="ew", pady=(6, 0))
 
         ttk.Button(
             transactions_frame,
@@ -290,6 +323,64 @@ class BudgetApp(tk.Tk):
         except KeyError as exc:  # noqa: BLE001
             messagebox.showerror("Error", str(exc))
 
+    def _start_ai_classification(self) -> None:
+        if self.ai_active:
+            return
+        self.ai_active = True
+        self.ai_start_button.configure(state="disabled")
+        self.ai_stop_button.configure(state="normal")
+        self._set_status("AI classification started.")
+        self._on_data_changed(self.viewmodel.ledger)
+
+    def _stop_ai_classification(self) -> None:
+        if not self.ai_active:
+            return
+        self.ai_active = False
+        self.ai_suggestions.clear()
+        self.ai_start_button.configure(state="normal")
+        self.ai_stop_button.configure(state="disabled")
+        self._on_data_changed(self.viewmodel.ledger)
+        self._set_status("AI classification stopped.")
+
+    def _handle_transaction_click(self, event) -> None:
+        if not self.ai_active:
+            return
+        tree = self.transaction_table.tree
+        region = tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        column = tree.identify_column(event.x)
+        try:
+            column_index = int(column.replace("#", "")) - 1
+        except ValueError:
+            return
+        columns = tree["columns"]
+        if column_index < 0 or column_index >= len(columns):
+            return
+        if columns[column_index] != "apply":
+            return
+        item_id = tree.identify_row(event.y)
+        if not item_id:
+            return
+        suggestion = self.ai_suggestions.get(item_id)
+        if not suggestion:
+            return
+        self._accept_ai_suggestion(item_id, suggestion)
+
+    def _accept_ai_suggestion(self, transaction_id: str, category_name: str) -> None:
+        try:
+            created = self.viewmodel.accept_ai_suggestion(transaction_id, category_name)
+        except Exception as exc:  # noqa: BLE001 - user-friendly message
+            messagebox.showerror("Error", str(exc))
+            return
+
+        if created:
+            self._set_status(
+                f"Created category '{category_name}' and assigned it to the transaction."
+            )
+        else:
+            self._set_status(f"Assigned suggested category '{category_name}'.")
+
     def _handle_import_csv(self) -> None:
         file_path = filedialog.askopenfilename(
             title="Select CSV File",
@@ -327,7 +418,17 @@ class BudgetApp(tk.Tk):
         categories = list(self.viewmodel.categories_for_table())
         transactions = list(self.viewmodel.transactions_for_table())
 
+        if self.ai_active:
+            self.ai_suggestions = self.viewmodel.suggest_categories_for_unassigned()
+        else:
+            self.ai_suggestions = {}
+
         self.category_table.populate(categories, key_field="category_id")
+        for row in transactions:
+            txn_id = row["transaction_id"]
+            suggestion = self.ai_suggestions.get(txn_id, "")
+            row["suggestion"] = suggestion
+            row["apply"] = "✅" if suggestion else ""
         self.transaction_table.populate(transactions, key_field="transaction_id")
 
         planned_total = sum(float(row["planned"]) for row in categories)

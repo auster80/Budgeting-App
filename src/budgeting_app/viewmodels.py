@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
+from .ai import TransactionClassifier
 from .csv_importer import CSVTransaction, read_transactions_from_csv
 from .models import BudgetLedger, BudgetCategory, Transaction
 from .storage import load_ledger, save_ledger
@@ -21,6 +22,7 @@ class BudgetViewModel:
         self.data_file = data_file
         self.ledger: BudgetLedger = BudgetLedger()
         self._listeners: List[ChangeListener] = []
+        self._classifier = TransactionClassifier()
 
     # ------------------------------------------------------------------ #
     # Persistence
@@ -144,6 +146,44 @@ class BudgetViewModel:
                 "category": category_name,
                 "occurred_on": txn.occurred_on,
             }
+
+    # ------------------------------------------------------------------ #
+    # AI assisted categorisation
+    # ------------------------------------------------------------------ #
+    def suggest_categories_for_unassigned(self) -> dict[str, str]:
+        """Return AI category suggestions for unassigned transactions."""
+
+        existing_names = [category.name for category in self.ledger.categories.values()]
+        suggestions: dict[str, str] = {}
+        for txn in self.ledger.transactions:
+            if txn.category_id:
+                continue
+            result = self._classifier.suggest_category(txn, existing_names)
+            if result is None:
+                continue
+            suggestions[txn.transaction_id] = result.category_name
+        return suggestions
+
+    def accept_ai_suggestion(self, transaction_id: str, category_name: str) -> bool:
+        """Apply an AI suggestion and ensure the category exists.
+
+        Returns ``True`` when the category had to be created.
+        """
+
+        category_id = None
+        for cid, category in self.ledger.categories.items():
+            if category.name.lower() == category_name.lower():
+                category_id = cid
+                break
+
+        created = False
+        if category_id is None:
+            category = self.ledger.add_category(category_name, Decimal("0.00"))
+            category_id = category.category_id
+            created = True
+
+        self.set_transaction_category(transaction_id, category_id)
+        return created
 
     # ------------------------------------------------------------------ #
     # Utility helpers
