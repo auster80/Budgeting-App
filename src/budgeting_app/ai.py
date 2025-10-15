@@ -14,14 +14,34 @@ try:  # pragma: no cover - optional dependency error classes vary by version
     from openai import OpenAI
     from openai import APIError as _APIError  # type: ignore
     from openai import OpenAIError as _OpenAIError  # type: ignore
+    _LEGACY_OPENAI = None
 except Exception:  # pragma: no cover - OpenAI not available during type checking
     OpenAI = None  # type: ignore
+    try:
+        import openai as _LEGACY_OPENAI  # type: ignore
+        from openai.error import OpenAIError as _OpenAIError  # type: ignore
+        try:  # pragma: no cover - APIError was added in later 0.x releases
+            from openai.error import APIError as _APIError  # type: ignore
+        except Exception:  # pragma: no cover - fall back to base error
+            _APIError = _OpenAIError  # type: ignore
+    except Exception:  # pragma: no cover - legacy SDK also missing
+        _LEGACY_OPENAI = None
 
-    class _OpenAIError(Exception):
-        """Fallback error when the OpenAI SDK is unavailable."""
+        class _OpenAIError(Exception):
+            """Fallback error when the OpenAI SDK is unavailable."""
 
-    class _APIError(_OpenAIError):
-        """Fallback error for compatibility with SDK signatures."""
+        class _APIError(_OpenAIError):
+            """Fallback error for compatibility with SDK signatures."""
+
+
+class _LegacyChatCompletionClient:
+    """Compatibility shim for the legacy openai.ChatCompletion API."""
+
+    def __init__(self, module: object) -> None:
+        self._module = module
+
+    def create(self, **kwargs):  # type: ignore[no-untyped-def]
+        return self._module.ChatCompletion.create(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -47,8 +67,33 @@ class TransactionClassifier:
         self.max_feedback_examples = max_feedback_examples
         self._memory: dict[str, ClassificationResult] = {}
         api_key = os.getenv("OPENAI_API_KEY")
-        self._client = OpenAI(api_key=api_key) if api_key and OpenAI else None
+        self._legacy_client: Optional[_LegacyChatCompletionClient] = None
+        self._using_legacy_sdk = False
+        if OpenAI:
+            try:
+                # Newer SDKs automatically pick up the environment variable when no key is passed.
+                self._client = OpenAI(api_key=api_key) if api_key else OpenAI()
+            except TypeError:
+                # Older 1.x builds may not accept the api_key kwarg; fall back to env configuration.
+                self._client = OpenAI()
+            except Exception:
+                self._client = None
+        else:
+            self._client = None
+        if not self._client and _LEGACY_OPENAI is not None:
+            if api_key:
+                _LEGACY_OPENAI.api_key = api_key
+            elif getattr(_LEGACY_OPENAI, "api_key", None):
+                pass
+            else:
+                env_key = os.getenv("OPENAI_API_KEY")
+                if env_key:
+                    _LEGACY_OPENAI.api_key = env_key
+            if getattr(_LEGACY_OPENAI, "api_key", None):
+                self._legacy_client = _LegacyChatCompletionClient(_LEGACY_OPENAI)
+                self._using_legacy_sdk = True
         self._warned_missing_client = False
+        self._warned_legacy_mode = False
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -83,7 +128,7 @@ class TransactionClassifier:
                 logger("Using memoised classification for recurring transaction.")
             return self._memory[normalised_key]
 
-        if not self._client:
+        if not self._client and not self._legacy_client:
             # No API client configured; we can still benefit from memoised feedback.
             if logger:
                 logger(
@@ -121,21 +166,43 @@ class TransactionClassifier:
         try:
             if logger:
                 logger(f"Requesting classification from model '{self.model}'.")
-            response = self._client.chat.completions.create(  # type: ignore[call-arg]
-                model=self.model,
-                temperature=self.temperature,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You categorise personal finance transactions for a budgeting app. "
-                            "Return concise JSON only. Prefer categories that already exist "
-                            "and be consistent with prior assignments."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
+            if self._legacy_client is not None:
+                if logger and not self._warned_legacy_mode:
+                    logger(
+                        "Detected legacy OpenAI SDK; using ChatCompletion API for compatibility."
+                    )
+                    self._warned_legacy_mode = True
+                response = self._legacy_client.create(
+                    model=self.model,
+                    temperature=self.temperature,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You categorise personal finance transactions for a budgeting app. "
+                                "Return concise JSON only. Prefer categories that already exist "
+                                "and be consistent with prior assignments."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+            else:
+                response = self._client.chat.completions.create(  # type: ignore[call-arg]
+                    model=self.model,
+                    temperature=self.temperature,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You categorise personal finance transactions for a budgeting app. "
+                                "Return concise JSON only. Prefer categories that already exist "
+                                "and be consistent with prior assignments."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                )
         except (_APIError, _OpenAIError) as exc:  # pragma: no cover - network failure path
             if logger:
                 logger(f"OpenAI API error: {exc}")
