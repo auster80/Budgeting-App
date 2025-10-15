@@ -48,6 +48,7 @@ class TransactionClassifier:
         self._memory: dict[str, ClassificationResult] = {}
         api_key = os.getenv("OPENAI_API_KEY")
         self._client = OpenAI(api_key=api_key) if api_key and OpenAI else None
+        self._warned_missing_client = False
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -88,6 +89,18 @@ class TransactionClassifier:
                 logger(
                     "OpenAI client is not configured; using heuristic fallback classifier."
                 )
+                if not self._warned_missing_client:
+                    logger(
+                        "Set the OPENAI_API_KEY environment variable before launching the app to "
+                        "enable ChatGPT-backed categorisation."
+                    )
+                    logger(
+                        "Example (PowerShell): setx OPENAI_API_KEY 'sk-...' and restart the app."
+                    )
+                    logger(
+                        "Example (macOS/Linux): export OPENAI_API_KEY='sk-...' before running the app."
+                    )
+                    self._warned_missing_client = True
             fallback = self._heuristic_classification(
                 transaction,
                 categories,
