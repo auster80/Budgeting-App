@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -23,6 +24,19 @@ class BudgetApp(tk.Tk):
         self.viewmodel = viewmodel
         self.category_lookup: dict[str, str] = {}
         self.category_name_by_id: dict[str, str] = {}
+        self.category_colors: dict[str, str] = {}
+        self._current_categories: list[dict[str, str]] = []
+        self._color_palette = [
+            "#fde68a",
+            "#fca5a5",
+            "#a5f3fc",
+            "#bbf7d0",
+            "#c4b5fd",
+            "#f9a8d4",
+            "#fdba74",
+            "#bef264",
+        ]
+        self._next_color_index = 0
         self.status_var = tk.StringVar(value="Ready")
         self.ai_active = False
         self.ai_suggestions: dict[str, ClassificationResult] = {}
@@ -31,6 +45,10 @@ class BudgetApp(tk.Tk):
         self._ai_stop_event: threading.Event | None = None
         self._ai_refresh_pending = False
         self._suspend_ai_refresh = False
+        self._chart_shape_to_category: dict[int, str] = {}
+        self._chart_resize_after_id: str | None = None
+        self._current_tooltip_category: str | None = None
+        self._chart_visible = False
 
         self._configure_styles()
         self._build_menu()
@@ -143,11 +161,88 @@ class BudgetApp(tk.Tk):
             command=self._handle_edit_category,
         )
 
+        actions = ttk.Frame(categories_frame)
+        actions.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+
         ttk.Button(
-            categories_frame,
+            actions,
             text="Delete Selected Category",
             command=self._handle_delete_category,
-        ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self.show_chart_button = ttk.Button(
+            actions,
+            text="Show Actuals Chart",
+            command=self._toggle_category_chart,
+        )
+        self.show_chart_button.grid(row=0, column=1, sticky="ew")
+
+        self.category_chart_frame = ttk.Labelframe(
+            categories_frame,
+            text="Category Actuals",
+            style="Card.TLabelframe",
+        )
+        self.category_chart_frame.grid(row=3, column=0, sticky="nsew", pady=(6, 0))
+        self.category_chart_frame.columnconfigure(0, weight=1)
+        self.category_chart_frame.rowconfigure(1, weight=1)
+
+        controls = ttk.Frame(self.category_chart_frame)
+        controls.grid(row=0, column=0, sticky="ew")
+        controls.columnconfigure(3, weight=1)
+
+        ttk.Label(controls, text="Chart Type:").grid(row=0, column=0, sticky="w")
+        self.chart_type_var = tk.StringVar(value="bar")
+        ttk.Radiobutton(
+            controls,
+            text="Bar",
+            value="bar",
+            variable=self.chart_type_var,
+            command=self._update_category_chart,
+        ).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Radiobutton(
+            controls,
+            text="Pie",
+            value="pie",
+            variable=self.chart_type_var,
+            command=self._update_category_chart,
+        ).grid(row=0, column=2, sticky="w", padx=(6, 0))
+
+        self.chart_canvas = tk.Canvas(
+            self.category_chart_frame,
+            height=260,
+            background="white",
+            highlightthickness=1,
+            highlightbackground="#d9d9d9",
+        )
+        self.chart_canvas.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        self.chart_canvas.bind("<Motion>", self._handle_chart_motion)
+        self.chart_canvas.bind("<Leave>", lambda _event: self._hide_chart_tooltip())
+        self.chart_canvas.bind("<Configure>", self._handle_chart_resize)
+
+        self.category_chart_frame.grid_remove()
+
+        self.chart_tooltip = tk.Toplevel(self)
+        self.chart_tooltip.withdraw()
+        self.chart_tooltip.overrideredirect(True)
+        self.chart_tooltip.transient(self)
+        self.chart_tooltip.configure(background="#ffffe0")
+        try:
+            self.chart_tooltip.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        self.chart_tooltip_label = tk.Label(
+            self.chart_tooltip,
+            text="",
+            background="#ffffe0",
+            relief="solid",
+            borderwidth=1,
+            padx=6,
+            pady=2,
+            font=("Segoe UI", 9),
+        )
+        self.chart_tooltip_label.pack(fill="both", expand=True)
 
     def _build_transactions_section(self, parent: ttk.Frame) -> None:
         transactions_frame = ttk.Labelframe(parent, text="Transactions", style="Card.TLabelframe")
@@ -477,6 +572,7 @@ class BudgetApp(tk.Tk):
     # ------------------------------------------------------------------ #
     def _on_data_changed(self, _ledger) -> None:
         categories = list(self.viewmodel.categories_for_table())
+        self._current_categories = categories
         transactions = list(self.viewmodel.transactions_for_table())
 
         self._prune_ai_suggestions()
@@ -488,6 +584,7 @@ class BudgetApp(tk.Tk):
         self.category_table.populate(categories, key_field="category_id")
         self.transaction_table.populate(transactions, key_field="transaction_id")
         self._apply_ai_suggestions_to_table()
+        self._update_category_colors(categories)
 
         planned_total = sum(float(row["planned"]) for row in categories)
         actual_total = sum(float(row["actual"]) for row in categories)
@@ -501,6 +598,276 @@ class BudgetApp(tk.Tk):
         self.assign_category_input.configure(values=list(self.category_lookup.keys()))
         self._set_status("Budget data loaded.")
         self._refresh_ai_log()
+        self._update_category_chart()
+
+    # ------------------------------------------------------------------ #
+    # Category colour and chart helpers
+    # ------------------------------------------------------------------ #
+    def _next_category_color(self) -> str:
+        if not self._color_palette:
+            return "#d9d9d9"
+        color = self._color_palette[self._next_color_index % len(self._color_palette)]
+        self._next_color_index += 1
+        return color
+
+    def _update_category_colors(self, categories: list[dict[str, str]]) -> None:
+        if not hasattr(self, "category_table"):
+            return
+
+        active_ids = {row.get("category_id", "") for row in categories if row.get("category_id")}
+        for stale_id in set(self.category_colors) - active_ids:
+            self.category_colors.pop(stale_id, None)
+
+        for row in categories:
+            category_id = row.get("category_id")
+            if not category_id:
+                continue
+            if category_id not in self.category_colors:
+                self.category_colors[category_id] = self._next_category_color()
+
+        tree = self.category_table.tree
+        for category_id in active_ids:
+            if not tree.exists(category_id):
+                continue
+            color = self.category_colors.get(category_id, "#d9d9d9")
+            tag = f"category_{category_id}"
+            tree.item(category_id, tags=(tag,))
+            tree.tag_configure(tag, background=color, foreground="#202020")
+
+    def _toggle_category_chart(self) -> None:
+        self._chart_visible = not self._chart_visible
+        if self._chart_visible:
+            self.category_chart_frame.grid()
+            self.show_chart_button.configure(text="Hide Actuals Chart")
+            self._update_category_chart()
+        else:
+            self.category_chart_frame.grid_remove()
+            self.show_chart_button.configure(text="Show Actuals Chart")
+            self._hide_chart_tooltip()
+
+    def _update_category_chart(self) -> None:
+        if not getattr(self, "chart_canvas", None) or not self._chart_visible:
+            return
+
+        canvas = self.chart_canvas
+        if self._chart_resize_after_id:
+            self.after_cancel(self._chart_resize_after_id)
+            self._chart_resize_after_id = None
+        canvas.delete("all")
+        self._chart_shape_to_category.clear()
+
+        categories = getattr(self, "_current_categories", [])
+        if not categories:
+            self._draw_chart_message("Add categories to visualise actual amounts.")
+            return
+
+        chart_data: list[tuple[str, str, float]] = []
+        for row in categories:
+            category_id = row.get("category_id")
+            if not category_id:
+                continue
+            try:
+                actual_value = float(row.get("actual", "0") or 0)
+            except ValueError:
+                actual_value = 0.0
+            chart_data.append((category_id, row.get("name", ""), actual_value))
+
+        if not chart_data:
+            self._draw_chart_message("Add categories to visualise actual amounts.")
+            return
+
+        chart_type = self.chart_type_var.get() if hasattr(self, "chart_type_var") else "bar"
+        if chart_type == "pie":
+            self._draw_pie_chart(chart_data)
+        else:
+            self._draw_bar_chart(chart_data)
+
+    def _draw_chart_message(self, message: str) -> None:
+        if not getattr(self, "chart_canvas", None):
+            return
+        width = int(self.chart_canvas.winfo_width() or self.chart_canvas["width"])
+        height = int(self.chart_canvas.winfo_height() or self.chart_canvas["height"])
+        self.chart_canvas.create_text(
+            width / 2,
+            height / 2,
+            text=message,
+            fill="#555555",
+            font=("Segoe UI", 11),
+        )
+
+    def _draw_bar_chart(self, data: list[tuple[str, str, float]]) -> None:
+        if not data:
+            return
+        canvas = self.chart_canvas
+        width = int(canvas.winfo_width() or canvas["width"])
+        height = int(canvas.winfo_height() or canvas["height"])
+        padding_x = 32
+        padding_y = 28
+        available_width = max(width - 2 * padding_x, 1)
+        available_height = max(height - 2 * padding_y, 1)
+
+        values = [value for _, _, value in data]
+        max_value = max(values + [0])
+        min_value = min(values + [0])
+        value_range = max_value - min_value
+        if value_range == 0:
+            value_range = max_value if max_value != 0 else 1
+        scale = available_height / value_range
+        zero_y = height - padding_y - (-min_value * scale)
+
+        bar_spacing = 12
+        bar_count = len(data)
+        bar_width = max((available_width - bar_spacing * (bar_count - 1)) / bar_count, 12)
+
+        for index, (category_id, name, value) in enumerate(data):
+            color = self.category_colors.get(category_id, "#d9d9d9")
+            x0 = padding_x + index * (bar_width + bar_spacing)
+            x1 = x0 + bar_width
+            if value >= 0:
+                y0 = zero_y - value * scale
+                y1 = zero_y
+            else:
+                y0 = zero_y
+                y1 = zero_y - value * scale
+            if abs(y1 - y0) < 1:
+                if value >= 0:
+                    y0 = y1 - 1
+                else:
+                    y1 = y0 + 1
+            rect = canvas.create_rectangle(
+                x0,
+                y0,
+                x1,
+                y1,
+                fill=color,
+                outline="",
+                tags=(f"category_{category_id}", "category_shape"),
+            )
+            self._chart_shape_to_category[rect] = category_id
+
+            canvas.create_text(
+                (x0 + x1) / 2,
+                y0 - 6 if value >= 0 else y1 + 14,
+                text=f"{value:.2f}",
+                fill="#333333",
+                font=("Segoe UI", 9),
+                anchor="s" if value >= 0 else "n",
+            )
+            canvas.create_text(
+                (x0 + x1) / 2,
+                height - padding_y + 6,
+                text=name,
+                fill="#333333",
+                font=("Segoe UI", 9),
+                anchor="n",
+                width=bar_width,
+            )
+
+        axis_color = "#999999"
+        canvas.create_line(
+            padding_x - 8,
+            zero_y,
+            width - padding_x + 8,
+            zero_y,
+            fill=axis_color,
+        )
+
+    def _draw_pie_chart(self, data: list[tuple[str, str, float]]) -> None:
+        positive = [(cid, name, value) for cid, name, value in data if value > 0]
+        if not positive:
+            self._draw_chart_message("Pie chart requires positive actual amounts.")
+            return
+
+        canvas = self.chart_canvas
+        width = int(canvas.winfo_width() or canvas["width"])
+        height = int(canvas.winfo_height() or canvas["height"])
+        diameter = max(min(width, height) - 40, 60)
+        radius = diameter / 2
+        center_x = width / 2
+        center_y = height / 2
+        bbox = (
+            center_x - radius,
+            center_y - radius,
+            center_x + radius,
+            center_y + radius,
+        )
+        total = sum(value for _, _, value in positive)
+        start_angle = 0.0
+
+        for category_id, name, value in positive:
+            extent = (value / total) * 360
+            color = self.category_colors.get(category_id, "#d9d9d9")
+            arc = canvas.create_arc(
+                *bbox,
+                start=start_angle,
+                extent=extent,
+                fill=color,
+                outline="white",
+                width=2,
+                tags=(f"category_{category_id}", "category_shape"),
+            )
+            self._chart_shape_to_category[arc] = category_id
+
+            mid_angle = math.radians(start_angle + extent / 2)
+            label_x = center_x + (radius * 0.6) * math.cos(mid_angle)
+            label_y = center_y - (radius * 0.6) * math.sin(mid_angle)
+            canvas.create_text(
+                label_x,
+                label_y,
+                text=f"{value:.2f}",
+                fill="#333333",
+                font=("Segoe UI", 9, "bold"),
+            )
+
+            start_angle += extent
+
+    def _handle_chart_motion(self, event) -> None:
+        if not self._chart_visible:
+            return
+        canvas = event.widget
+        item = canvas.find_withtag("current")
+        if not item:
+            self._hide_chart_tooltip()
+            return
+        item_id = item[0]
+        tags = canvas.gettags(item_id)
+        if "category_shape" not in tags:
+            self._hide_chart_tooltip()
+            return
+        category_id = self._chart_shape_to_category.get(item_id)
+        if not category_id:
+            self._hide_chart_tooltip()
+            return
+        if category_id == self._current_tooltip_category:
+            self._move_chart_tooltip(event.x_root, event.y_root)
+            return
+        name = self.category_name_by_id.get(category_id)
+        if not name:
+            self._hide_chart_tooltip()
+            return
+        self._current_tooltip_category = category_id
+        self.chart_tooltip_label.configure(text=name)
+        self._move_chart_tooltip(event.x_root, event.y_root)
+        self.chart_tooltip.deiconify()
+
+    def _move_chart_tooltip(self, x_root: int, y_root: int) -> None:
+        self.chart_tooltip.geometry(f"+{x_root + 12}+{y_root + 12}")
+
+    def _hide_chart_tooltip(self) -> None:
+        self._current_tooltip_category = None
+        if hasattr(self, "chart_tooltip"):
+            self.chart_tooltip.withdraw()
+
+    def _handle_chart_resize(self, _event) -> None:
+        if not self._chart_visible:
+            return
+        if self._chart_resize_after_id:
+            self.after_cancel(self._chart_resize_after_id)
+        self._chart_resize_after_id = self.after(120, self._redraw_chart_after_resize)
+
+    def _redraw_chart_after_resize(self) -> None:
+        self._chart_resize_after_id = None
+        self._update_category_chart()
 
     def _apply_ai_suggestions_to_table(self) -> None:
         """Populate the AI suggestion column for the rendered transactions."""
