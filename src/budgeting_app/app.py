@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+import urllib.parse
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -219,6 +221,9 @@ class BudgetApp(tk.Tk):
         )
         self.transaction_table.grid(row=2, column=0, sticky="nsew")
         self.transaction_table.tree.bind("<ButtonRelease-1>", self._handle_transaction_click)
+        self.transaction_table.tree.bind(
+            "<<TreeviewSelect>>", self._update_transaction_actions_state
+        )
         transactions_frame.rowconfigure(2, weight=1)
 
         assign_frame = ttk.Frame(transactions_frame)
@@ -248,12 +253,20 @@ class BudgetApp(tk.Tk):
         )
         self.ai_stop_button.grid(row=1, column=2, sticky="ew", pady=(6, 0))
 
+        self.search_company_button = ttk.Button(
+            assign_frame,
+            text="Search Company Online",
+            command=self._open_company_search,
+            state="disabled",
+        )
+        self.search_company_button.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+
         self.ai_log_button = ttk.Button(
             assign_frame,
             text="Show AI Log",
             command=self._toggle_ai_log,
         )
-        self.ai_log_button.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.ai_log_button.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
 
         self.ai_log_frame = ttk.Labelframe(
             transactions_frame,
@@ -366,6 +379,7 @@ class BudgetApp(tk.Tk):
         try:
             self.viewmodel.set_transactions_category(selected, category_id)
             self.transaction_table.tree.selection_set(())
+            self._update_transaction_actions_state()
             count = len(selected)
             label = "transaction" if count == 1 else "transactions"
             self._set_status(f"Assigned category to {count} {label}.")
@@ -501,6 +515,7 @@ class BudgetApp(tk.Tk):
         self.assign_category_input.configure(values=list(self.category_lookup.keys()))
         self._set_status("Budget data loaded.")
         self._refresh_ai_log()
+        self._update_transaction_actions_state()
 
     def _apply_ai_suggestions_to_table(self) -> None:
         """Populate the AI suggestion column for the rendered transactions."""
@@ -736,6 +751,51 @@ class BudgetApp(tk.Tk):
         self._ai_refresh_pending = True
         if not self._ai_worker_thread or not self._ai_worker_thread.is_alive():
             self._launch_ai_worker()
+
+    def _update_transaction_actions_state(self, _event=None) -> None:
+        """Enable or disable transaction actions that require a selection."""
+
+        has_selection = bool(self.transaction_table.tree.selection())
+        state = "normal" if has_selection else "disabled"
+        if hasattr(self, "search_company_button"):
+            self.search_company_button.configure(state=state)
+
+    def _open_company_search(self) -> None:
+        """Open a browser window searching Google for the selected transaction's company."""
+
+        tree = self.transaction_table.tree
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo("Select Transaction", "Select a transaction first.")
+            return
+
+        columns = list(tree["columns"])
+        values = tree.item(selected[0], "values")
+
+        def _value_for(column: str) -> str:
+            try:
+                index = columns.index(column)
+            except ValueError:
+                return ""
+            if index >= len(values):
+                return ""
+            return str(values[index]).strip()
+
+        company = _value_for("company")
+        description = _value_for("description")
+
+        query_parts = [part for part in (company, description) if part]
+        if not query_parts:
+            messagebox.showinfo(
+                "No Company Information",
+                "The selected transaction does not include company details to search.",
+            )
+            return
+
+        query = " ".join(query_parts)
+        url = "https://www.google.com/search?q=" + urllib.parse.quote(query)
+        webbrowser.open_new(url)
+        self._set_status(f"Opened web search for '{query}'.")
 
     def _launch_ai_worker(self) -> None:
         if not self.ai_active or not self._ai_refresh_pending:
