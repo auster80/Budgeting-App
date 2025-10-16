@@ -7,5 +7,6 @@ __all__ = [
     "viewmodels",
     "widgets",
     "csv_importer",
+    "text_utils",
     "ai",
 ]

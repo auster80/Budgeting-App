@@ -10,6 +10,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+from .text_utils import extract_company_name
+
 DATE_COLUMNS = ("Datum", "Rentedatum")
 DESCRIPTION_COLUMNS = (
     "Naam tegenpartij",
@@ -30,6 +32,7 @@ class CSVTransaction:
     account_name: Optional[str]
     counterparty: Optional[str]
     reference: Optional[str]
+    company: Optional[str] = None
 
 
 def _parse_decimal(value: str) -> Decimal:
@@ -122,4 +125,5 @@ def read_transactions_from_csv(path: str | Path) -> Iterable[CSVTransaction]:
             account_name=_account_name(row),
             counterparty=_counterparty(row),
             reference=_reference(row),
+            company=extract_company_name(description),
         )

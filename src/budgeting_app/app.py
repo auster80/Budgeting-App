@@ -180,6 +180,10 @@ class BudgetApp(tk.Tk):
             columns=(
                 "occurred_on",
                 "description",
+                "company",
+                "account",
+                "category",
+                "amount",
                 "account",
                 "category",
                 "amount",
@@ -189,6 +193,7 @@ class BudgetApp(tk.Tk):
             headings={
                 "occurred_on": "Date",
                 "description": "Description",
+                "company": "Company",
                 "account": "Account",
                 "category": "Category",
                 "amount": "Amount",
