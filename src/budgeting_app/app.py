@@ -194,9 +194,6 @@ class BudgetApp(tk.Tk):
                 "account",
                 "category",
                 "amount",
-                "account",
-                "category",
-                "amount",
                 "suggestion",
                 "apply",
             ),
@@ -208,7 +205,7 @@ class BudgetApp(tk.Tk):
                 "category": "Category",
                 "amount": "Amount",
                 "suggestion": "AI Suggestion",
-                "apply": "",
+                "apply": "Apply",
             },
             selectmode="extended",
             column_options={
