@@ -79,6 +79,7 @@ class BudgetViewModel:
         account_name: Optional[str] = None,
         counterparty: Optional[str] = None,
         reference: Optional[str] = None,
+        company: Optional[str] = None,
     ) -> Transaction:
         transaction = self.ledger.record_transaction(
             description=description,
@@ -89,6 +90,7 @@ class BudgetViewModel:
             account_name=account_name,
             counterparty=counterparty,
             reference=reference,
+            company=company,
         )
         self._notify()
         return transaction
@@ -123,6 +125,7 @@ class BudgetViewModel:
             yield {
                 "transaction_id": txn.transaction_id,
                 "description": txn.description,
+                "company": txn.company or txn.counterparty or "",
                 "account": txn.account_name or txn.account_id or "",
                 "amount": f"{txn.amount:.2f}",
                 "category": category_name,
@@ -173,6 +176,7 @@ class BudgetViewModel:
                 account_name=record.account_name,
                 counterparty=record.counterparty,
                 reference=record.reference,
+                company=record.company,
             )
             if record.reference:
                 existing_refs.add(record.reference)

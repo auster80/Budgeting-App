@@ -166,9 +166,17 @@ class BudgetApp(tk.Tk):
 
         self.transaction_table = Table(
             transactions_frame,
-            columns=("occurred_on", "description", "account", "category", "amount"),
+            columns=(
+                "occurred_on",
+                "company",
+                "description",
+                "account",
+                "category",
+                "amount",
+            ),
             headings={
                 "occurred_on": "Date",
+                "company": "Company",
                 "description": "Description",
                 "account": "Account",
                 "category": "Category",

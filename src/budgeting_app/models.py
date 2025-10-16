@@ -8,6 +8,8 @@ from decimal import Decimal, getcontext
 from typing import Dict, Iterable, List, Optional
 from uuid import uuid4
 
+from .text_utils import extract_company_name
+
 getcontext().prec = 28  # Higher precision for money calculations.
 
 
@@ -71,10 +73,13 @@ class Transaction:
     account_name: str | None = None
     counterparty: str | None = None
     reference: str | None = None
+    company: str | None = None
 
     def __post_init__(self) -> None:
         self.amount = _to_decimal(self.amount)
         self.occurred_on = _format_date(self.occurred_on)
+        if self.company is None:
+            self.company = extract_company_name(self.description)
 
     def to_dict(self) -> Dict[str, str]:
         """Serialise the transaction for JSON storage."""
@@ -95,6 +100,7 @@ class Transaction:
             account_name=payload.get("account_name"),
             counterparty=payload.get("counterparty"),
             reference=payload.get("reference"),
+            company=payload.get("company"),
         )
 
 
@@ -140,6 +146,7 @@ class BudgetLedger:
         account_name: Optional[str] = None,
         counterparty: Optional[str] = None,
         reference: Optional[str] = None,
+        company: Optional[str] = None,
     ) -> Transaction:
         """Add a transaction and update its category totals."""
         if category_id and category_id not in self.categories:
@@ -155,6 +162,7 @@ class BudgetLedger:
             account_name=account_name,
             counterparty=counterparty,
             reference=reference,
+            company=company,
         )
         self.transactions.append(transaction)
         if category_id:
