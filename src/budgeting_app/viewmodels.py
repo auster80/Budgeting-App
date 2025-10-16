@@ -156,8 +156,16 @@ class BudgetViewModel:
         *,
         logger: Optional[Callable[[str], None]] = None,
         should_abort: Optional[Callable[[], bool]] = None,
+        on_suggestion: Optional[
+            Callable[[str, ClassificationResult], None]
+        ] = None,
     ) -> dict[str, ClassificationResult]:
-        """Return AI category suggestions for unassigned transactions."""
+        """Return AI category suggestions for unassigned transactions.
+
+        When ``on_suggestion`` is provided the callback is invoked from the
+        classification loop as soon as an individual suggestion becomes
+        available, allowing the UI to update incrementally.
+        """
 
         log = logger or self._append_ai_log
         if should_abort and should_abort():
@@ -207,6 +215,8 @@ class BudgetViewModel:
                 log(f"No suggestion produced for '{txn_label}'.")
                 continue
             suggestions[txn.transaction_id] = result
+            if on_suggestion:
+                on_suggestion(txn.transaction_id, result)
             log(
                 "Recorded suggestion '{name}' (confidence {confidence:.0%}) for "
                 "transaction '{txn_label}'.".format(

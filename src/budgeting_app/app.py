@@ -497,14 +497,44 @@ class BudgetApp(tk.Tk):
             return
 
         for item_id in tree.get_children(""):
-            suggestion = self.ai_suggestions.get(item_id)
-            if suggestion:
-                display = f"{suggestion.category_name} ({suggestion.confidence:.0%})"
-                tree.set(item_id, "suggestion", display)
-                tree.set(item_id, "apply", "✅")
-            else:
-                tree.set(item_id, "suggestion", "")
-                tree.set(item_id, "apply", "")
+            self._update_ai_row(item_id, self.ai_suggestions.get(item_id))
+
+    def _update_ai_row(
+        self, transaction_id: str, suggestion: ClassificationResult | None
+    ) -> None:
+        if not hasattr(self, "transaction_table"):
+            return
+        tree = self.transaction_table.tree
+        if not tree.exists(transaction_id):
+            return
+        if suggestion:
+            tree.set(transaction_id, "suggestion", self._format_ai_suggestion(suggestion))
+            tree.set(transaction_id, "apply", "✅")
+        else:
+            tree.set(transaction_id, "suggestion", "")
+            tree.set(transaction_id, "apply", "")
+
+    @staticmethod
+    def _format_ai_suggestion(suggestion: ClassificationResult) -> str:
+        return f"{suggestion.category_name} ({suggestion.confidence:.0%})"
+
+    def _on_partial_ai_suggestion(
+        self, transaction_id: str, suggestion: ClassificationResult
+    ) -> None:
+        if not self.ai_active:
+            return
+        if not self._transaction_is_unassigned(transaction_id):
+            self.ai_suggestions.pop(transaction_id, None)
+            self._update_ai_row(transaction_id, None)
+            return
+        self.ai_suggestions[transaction_id] = suggestion
+        self._update_ai_row(transaction_id, suggestion)
+
+    def _transaction_is_unassigned(self, transaction_id: str) -> bool:
+        for txn in self.viewmodel.ledger.transactions:
+            if txn.transaction_id == transaction_id:
+                return not txn.category_id
+        return False
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
@@ -567,6 +597,8 @@ class BudgetApp(tk.Tk):
         self._ai_refresh_pending = False
 
         def worker() -> None:
+            collected: dict[str, ClassificationResult] = {}
+
             def log_message(message: str) -> None:
                 self.viewmodel.add_ai_log_entry(message)
                 self.after(0, self._refresh_ai_log)
@@ -574,10 +606,20 @@ class BudgetApp(tk.Tk):
             def should_abort() -> bool:
                 return stop_event.is_set() or not self.ai_active
 
+            def handle_suggestion(transaction_id: str, result: ClassificationResult) -> None:
+                collected[transaction_id] = result
+                self.after(
+                    0,
+                    lambda tid=transaction_id, res=result: self._on_partial_ai_suggestion(
+                        tid, res
+                    ),
+                )
+
             try:
                 suggestions = self.viewmodel.suggest_categories_for_unassigned(
                     logger=log_message,
                     should_abort=should_abort,
+                    on_suggestion=handle_suggestion,
                 )
             except Exception as exc:  # noqa: BLE001 - surface unexpected failures
                 self.viewmodel.add_ai_log_entry(f"AI classification error: {exc}")
@@ -586,10 +628,11 @@ class BudgetApp(tk.Tk):
                 self.after(0, self._refresh_ai_log)
 
             if should_abort():
-                self.after(0, lambda: self._on_ai_worker_finished({}, stop_event))
+                self.after(0, lambda: self._on_ai_worker_finished(collected, stop_event))
                 return
 
-            self.after(0, lambda: self._on_ai_worker_finished(suggestions, stop_event))
+            final_results = suggestions or collected
+            self.after(0, lambda: self._on_ai_worker_finished(final_results, stop_event))
 
         thread = threading.Thread(target=worker, daemon=True)
         self._ai_worker_thread = thread
@@ -599,7 +642,12 @@ class BudgetApp(tk.Tk):
         self, suggestions: dict[str, ClassificationResult], stop_event: threading.Event
     ) -> None:
         if self._ai_stop_event is stop_event and self.ai_active:
-            self.ai_suggestions = suggestions
+            filtered = {
+                txn_id: result
+                for txn_id, result in suggestions.items()
+                if self._transaction_is_unassigned(txn_id)
+            }
+            self.ai_suggestions = filtered
             self._suspend_ai_refresh = True
             self._on_data_changed(self.viewmodel.ledger)
 
