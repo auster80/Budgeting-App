@@ -53,6 +53,21 @@ class BudgetViewModel:
         self._notify()
         return category
 
+    def update_category(
+        self,
+        category_id: str,
+        *,
+        name: str | None = None,
+        planned_amount: str | float | Decimal | None = None,
+    ) -> BudgetCategory:
+        category = self.ledger.update_category(
+            category_id,
+            name=name,
+            planned_amount=planned_amount,
+        )
+        self._notify()
+        return category
+
     def delete_category(self, category_id: str) -> None:
         self.ledger.remove_category(category_id)
         self._notify()

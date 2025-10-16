@@ -127,6 +127,25 @@ class BudgetLedger:
         self.categories[category.category_id] = category
         return category
 
+    def update_category(
+        self,
+        category_id: str,
+        *,
+        name: str | None = None,
+        planned_amount: float | int | str | Decimal | None = None,
+    ) -> BudgetCategory:
+        """Update the editable fields of an existing budget category."""
+
+        if category_id not in self.categories:
+            raise KeyError(f"Unknown category id '{category_id}'")
+
+        category = self.categories[category_id]
+        if name is not None:
+            category.name = name
+        if planned_amount is not None:
+            category.planned_amount = _to_decimal(planned_amount)
+        return category
+
     def remove_category(self, category_id: str) -> None:
         """Remove a category and its associated transactions."""
         self.categories.pop(category_id, None)

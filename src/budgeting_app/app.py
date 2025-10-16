@@ -132,6 +132,16 @@ class BudgetApp(tk.Tk):
         self.category_table.grid(row=1, column=0, sticky="nsew")
         categories_frame.rowconfigure(1, weight=1)
         self.category_table.tree.bind("<<TreeviewSelect>>", self._handle_category_selection)
+        self.category_table.tree.bind("<Button-3>", self._show_category_context_menu)
+        self.category_table.tree.bind(
+            "<Control-Button-1>", self._show_category_context_menu, add="+"
+        )
+
+        self.category_context_menu = tk.Menu(self, tearoff=0)
+        self.category_context_menu.add_command(
+            label="Edit...",
+            command=self._handle_edit_category,
+        )
 
         ttk.Button(
             categories_frame,
@@ -568,6 +578,111 @@ class BudgetApp(tk.Tk):
         if not category_name:
             return
         self.assign_category_input.set(category_name)
+
+    def _show_category_context_menu(self, event) -> None:
+        tree = self.category_table.tree
+        row_id = tree.identify_row(event.y)
+        if not row_id:
+            tree.selection_remove(tree.selection())
+            return
+        tree.selection_set(row_id)
+        tree.focus(row_id)
+        try:
+            self.category_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.category_context_menu.grab_release()
+
+    def _handle_edit_category(self) -> None:
+        selected = self.category_table.tree.selection()
+        if not selected:
+            messagebox.showinfo(
+                "Select Category",
+                "Select a category to edit.",
+                parent=self,
+            )
+            return
+        category_id = selected[0]
+        category = self.viewmodel.ledger.categories.get(category_id)
+        if not category:
+            messagebox.showerror(
+                "Category Missing",
+                "The selected category could not be found.",
+                parent=self,
+            )
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Edit Category")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        container = ttk.Frame(dialog, padding=12)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+
+        name_input = LabeledEntry(container, label="Name")
+        name_input.grid(row=0, column=0, sticky="ew")
+        name_input.set(category.name)
+
+        amount_input = CurrencyEntry(container, label="Planned Amount")
+        amount_input.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        amount_input.set(f"{category.planned_amount:.2f}")
+
+        button_frame = ttk.Frame(container)
+        button_frame.grid(row=2, column=0, sticky="e", pady=(12, 0))
+
+        updated_name: str | None = None
+
+        def on_save() -> None:
+            nonlocal updated_name
+            new_name = name_input.get().strip()
+            planned = amount_input.get().strip() or "0"
+            if not new_name:
+                messagebox.showinfo(
+                    "Missing Data", "Please provide a category name.", parent=dialog
+                )
+                return
+            try:
+                self.viewmodel.update_category(
+                    category_id,
+                    name=new_name,
+                    planned_amount=planned,
+                )
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid Amount",
+                    "Planned amount must be numeric.",
+                    parent=dialog,
+                )
+                return
+            except KeyError:
+                messagebox.showerror(
+                    "Category Missing",
+                    "The selected category could not be found.",
+                    parent=dialog,
+                )
+                dialog.destroy()
+                return
+            updated_name = new_name
+            dialog.destroy()
+
+        def on_cancel() -> None:
+            dialog.destroy()
+
+        ttk.Button(button_frame, text="Cancel", command=on_cancel).grid(
+            row=0, column=0, padx=(0, 6)
+        )
+        ttk.Button(button_frame, text="Save", command=on_save, style="Primary.TButton").grid(
+            row=0, column=1
+        )
+
+        dialog.bind("<Return>", lambda _event: on_save())
+        dialog.bind("<Escape>", lambda _event: on_cancel())
+        dialog.wait_window()
+
+        if updated_name is not None:
+            self._set_status(f"Updated category '{updated_name}'.")
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
