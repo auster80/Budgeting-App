@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
-from .ai import TransactionClassifier
+from .ai import ClassificationResult, TransactionClassifier
 from .csv_importer import CSVTransaction, read_transactions_from_csv
 from .models import BudgetLedger, BudgetCategory, Transaction
 from .storage import load_ledger, save_ledger
@@ -156,7 +156,7 @@ class BudgetViewModel:
         *,
         logger: Optional[Callable[[str], None]] = None,
         should_abort: Optional[Callable[[], bool]] = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, ClassificationResult]:
         """Return AI category suggestions for unassigned transactions."""
 
         log = logger or self._append_ai_log
@@ -183,7 +183,7 @@ class BudgetViewModel:
             f"transaction{'s' if len(unassigned) != 1 else ''}."
         )
 
-        suggestions: dict[str, str] = {}
+        suggestions: dict[str, ClassificationResult] = {}
         for txn in unassigned:
             if should_abort and should_abort():
                 log("AI classification cancelled.")
@@ -206,10 +206,14 @@ class BudgetViewModel:
             if result is None:
                 log(f"No suggestion produced for '{txn_label}'.")
                 continue
-            suggestions[txn.transaction_id] = result.category_name
+            suggestions[txn.transaction_id] = result
             log(
-                f"Accepted suggestion '{result.category_name}' for "
-                f"transaction '{txn_label}'."
+                "Recorded suggestion '{name}' (confidence {confidence:.0%}) for "
+                "transaction '{txn_label}'.".format(
+                    name=result.category_name,
+                    confidence=result.confidence,
+                    txn_label=txn_label,
+                )
             )
         return suggestions
 

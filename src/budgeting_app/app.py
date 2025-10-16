@@ -7,6 +7,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from .ai import ClassificationResult
 from .viewmodels import BudgetViewModel
 from .widgets import CurrencyEntry, LabeledEntry, Table
 
@@ -23,7 +24,7 @@ class BudgetApp(tk.Tk):
         self.category_lookup: dict[str, str] = {}
         self.status_var = tk.StringVar(value="Ready")
         self.ai_active = False
-        self.ai_suggestions: dict[str, str] = {}
+        self.ai_suggestions: dict[str, ClassificationResult] = {}
         self.ai_log_visible = False
         self._ai_worker_thread: threading.Thread | None = None
         self._ai_stop_event: threading.Event | None = None
@@ -408,7 +409,7 @@ class BudgetApp(tk.Tk):
         suggestion = self.ai_suggestions.get(item_id)
         if not suggestion:
             return
-        self._accept_ai_suggestion(item_id, suggestion)
+        self._accept_ai_suggestion(item_id, suggestion.category_name)
 
     def _accept_ai_suggestion(self, transaction_id: str, category_name: str) -> None:
         try:
@@ -471,9 +472,13 @@ class BudgetApp(tk.Tk):
         self.category_table.populate(categories, key_field="category_id")
         for row in transactions:
             txn_id = row["transaction_id"]
-            suggestion = self.ai_suggestions.get(txn_id, "")
-            row["suggestion"] = suggestion
-            row["apply"] = "✅" if suggestion else ""
+            suggestion = self.ai_suggestions.get(txn_id)
+            if suggestion:
+                row["suggestion"] = f"{suggestion.category_name} ({suggestion.confidence:.0%})"
+                row["apply"] = "✅"
+            else:
+                row["suggestion"] = ""
+                row["apply"] = ""
         self.transaction_table.populate(transactions, key_field="transaction_id")
 
         planned_total = sum(float(row["planned"]) for row in categories)
@@ -578,7 +583,7 @@ class BudgetApp(tk.Tk):
         thread.start()
 
     def _on_ai_worker_finished(
-        self, suggestions: dict[str, str], stop_event: threading.Event
+        self, suggestions: dict[str, ClassificationResult], stop_event: threading.Event
     ) -> None:
         if self._ai_stop_event is stop_event and self.ai_active:
             self.ai_suggestions = suggestions
