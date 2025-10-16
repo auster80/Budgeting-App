@@ -470,16 +470,8 @@ class BudgetApp(tk.Tk):
         self._suspend_ai_refresh = False
 
         self.category_table.populate(categories, key_field="category_id")
-        for row in transactions:
-            txn_id = row["transaction_id"]
-            suggestion = self.ai_suggestions.get(txn_id)
-            if suggestion:
-                row["suggestion"] = f"{suggestion.category_name} ({suggestion.confidence:.0%})"
-                row["apply"] = "✅"
-            else:
-                row["suggestion"] = ""
-                row["apply"] = ""
         self.transaction_table.populate(transactions, key_field="transaction_id")
+        self._apply_ai_suggestions_to_table()
 
         planned_total = sum(float(row["planned"]) for row in categories)
         actual_total = sum(float(row["actual"]) for row in categories)
@@ -492,6 +484,27 @@ class BudgetApp(tk.Tk):
         self.assign_category_input.configure(values=list(self.category_lookup.keys()))
         self._set_status("Budget data loaded.")
         self._refresh_ai_log()
+
+    def _apply_ai_suggestions_to_table(self) -> None:
+        """Populate the AI suggestion column for the rendered transactions."""
+
+        if not hasattr(self, "transaction_table"):
+            return
+
+        tree = self.transaction_table.tree
+        columns = set(tree["columns"])
+        if "suggestion" not in columns or "apply" not in columns:
+            return
+
+        for item_id in tree.get_children(""):
+            suggestion = self.ai_suggestions.get(item_id)
+            if suggestion:
+                display = f"{suggestion.category_name} ({suggestion.confidence:.0%})"
+                tree.set(item_id, "suggestion", display)
+                tree.set(item_id, "apply", "✅")
+            else:
+                tree.set(item_id, "suggestion", "")
+                tree.set(item_id, "apply", "")
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
