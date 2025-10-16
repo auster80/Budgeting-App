@@ -388,8 +388,6 @@ class BudgetApp(tk.Tk):
         self._set_status("AI classification stopped.")
 
     def _handle_transaction_click(self, event) -> None:
-        if not self.ai_active:
-            return
         tree = self.transaction_table.tree
         region = tree.identify_region(event.x, event.y)
         if region != "cell":
