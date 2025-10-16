@@ -779,17 +779,15 @@ class BudgetApp(tk.Tk):
             return str(values[index]).strip()
 
         company = _value_for("company")
-        description = _value_for("description")
 
-        query_parts = [part for part in (company, description) if part]
-        if not query_parts:
+        if not company:
             messagebox.showinfo(
                 "No Company Information",
                 "The selected transaction does not include company details to search.",
             )
             return
 
-        query = " ".join(query_parts)
+        query = company
         url = "https://www.google.com/search?q=" + urllib.parse.quote(query)
         webbrowser.open_new(url)
         self._set_status(f"Opened web search for '{query}'.")
