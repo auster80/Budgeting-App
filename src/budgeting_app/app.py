@@ -168,16 +168,16 @@ class BudgetApp(tk.Tk):
             transactions_frame,
             columns=(
                 "occurred_on",
-                "company",
                 "description",
+                "company",
                 "account",
                 "category",
                 "amount",
             ),
             headings={
                 "occurred_on": "Date",
-                "company": "Company",
                 "description": "Description",
+                "company": "Company",
                 "account": "Account",
                 "category": "Category",
                 "amount": "Amount",
