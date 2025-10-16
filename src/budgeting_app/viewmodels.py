@@ -7,7 +7,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
-from .ai import ClassificationResult, TransactionClassifier
 from .csv_importer import CSVTransaction, read_transactions_from_csv
 from .models import BudgetLedger, BudgetCategory, Transaction
 from .storage import load_ledger, save_ledger
@@ -22,8 +21,6 @@ class BudgetViewModel:
         self.data_file = data_file
         self.ledger: BudgetLedger = BudgetLedger()
         self._listeners: List[ChangeListener] = []
-        self._classifier = TransactionClassifier()
-        self._ai_log: List[str] = []
 
     # ------------------------------------------------------------------ #
     # Persistence
@@ -147,124 +144,6 @@ class BudgetViewModel:
                 "category": category_name,
                 "occurred_on": txn.occurred_on,
             }
-
-    # ------------------------------------------------------------------ #
-    # AI assisted categorisation
-    # ------------------------------------------------------------------ #
-    def suggest_categories_for_unassigned(
-        self,
-        *,
-        logger: Optional[Callable[[str], None]] = None,
-        should_abort: Optional[Callable[[], bool]] = None,
-        on_suggestion: Optional[
-            Callable[[str, ClassificationResult], None]
-        ] = None,
-    ) -> dict[str, ClassificationResult]:
-        """Return AI category suggestions for unassigned transactions.
-
-        When ``on_suggestion`` is provided the callback is invoked from the
-        classification loop as soon as an individual suggestion becomes
-        available, allowing the UI to update incrementally.
-        """
-
-        log = logger or self._append_ai_log
-        if should_abort and should_abort():
-            log("AI classification cancelled before starting.")
-            return {}
-        existing_names = [category.name for category in self.ledger.categories.values()]
-        categorized_examples: list[tuple[Transaction, str]] = []
-        for txn in self.ledger.transactions:
-            if not txn.category_id:
-                continue
-            category = self.ledger.categories.get(txn.category_id)
-            if not category:
-                continue
-            categorized_examples.append((txn, category.name))
-
-        unassigned = [txn for txn in self.ledger.transactions if not txn.category_id]
-        if not unassigned:
-            log("No unassigned transactions to classify.")
-            return {}
-
-        log(
-            f"Attempting to classify {len(unassigned)} unassigned "
-            f"transaction{'s' if len(unassigned) != 1 else ''}."
-        )
-
-        suggestions: dict[str, ClassificationResult] = {}
-        for txn in unassigned:
-            if should_abort and should_abort():
-                log("AI classification cancelled.")
-                break
-            txn_label = txn.description or txn.transaction_id or "(unnamed)"
-            log(f"Requesting suggestion for '{txn_label}'.")
-
-            def txn_logger(message: str, *, txn_id: str = txn.transaction_id) -> None:
-                log(f"[{txn_id}] {message}")
-
-            result = self._classifier.suggest_category(
-                txn,
-                existing_names,
-                categorized_examples,
-                logger=txn_logger,
-            )
-            if should_abort and should_abort():
-                log("AI classification cancelled.")
-                break
-            if result is None:
-                log(f"No suggestion produced for '{txn_label}'.")
-                continue
-            suggestions[txn.transaction_id] = result
-            if on_suggestion:
-                on_suggestion(txn.transaction_id, result)
-            log(
-                "Recorded suggestion '{name}' (confidence {confidence:.0%}) for "
-                "transaction '{txn_label}'.".format(
-                    name=result.category_name,
-                    confidence=result.confidence,
-                    txn_label=txn_label,
-                )
-            )
-        return suggestions
-
-    def accept_ai_suggestion(self, transaction_id: str, category_name: str) -> bool:
-        """Apply an AI suggestion and ensure the category exists.
-
-        Returns ``True`` when the category had to be created.
-        """
-
-        category_id = None
-        for cid, category in self.ledger.categories.items():
-            if category.name.lower() == category_name.lower():
-                category_id = cid
-                break
-
-        created = False
-        if category_id is None:
-            category = self.ledger.add_category(category_name, Decimal("0.00"))
-            category_id = category.category_id
-            created = True
-
-        self.set_transaction_category(transaction_id, category_id)
-        return created
-
-    # ------------------------------------------------------------------ #
-    # AI log helpers
-    # ------------------------------------------------------------------ #
-    def clear_ai_log(self) -> None:
-        self._ai_log.clear()
-
-    def get_ai_log(self) -> List[str]:
-        return list(self._ai_log)
-
-    def add_ai_log_entry(self, message: str) -> None:
-        self._append_ai_log(message)
-
-    def _append_ai_log(self, message: str) -> None:
-        self._ai_log.append(message)
-        # Keep the log to a sensible size for the UI widget.
-        if len(self._ai_log) > 500:
-            self._ai_log = self._ai_log[-500:]
 
     # ------------------------------------------------------------------ #
     # Utility helpers

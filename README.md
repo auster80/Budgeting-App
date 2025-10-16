@@ -14,7 +14,7 @@ This project provides a lightweight Windows-friendly budgeting application built
 ## Requirements
 
 - Python 3.10 or later (developed against Python 3.13.6).
-- [OpenAI Python SDK](https://github.com/openai/openai-python) for AI-assisted categorisation.
+- No third-party packages are required; Tkinter ships with the standard library.
 
 ## Quick Start
 
@@ -22,7 +22,6 @@ This project provides a lightweight Windows-friendly budgeting application built
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -U pip
-python -m pip install -e .
 python src\budgeting_app\main.py
 ```
 
@@ -42,18 +41,6 @@ The app stores its data in `budget_data.json`. You can change this path with the
 - `src/budgeting_app/viewmodels.py` – Glue between the UI and data layer.
 - `src/budgeting_app/widgets.py` – Custom Tkinter widgets used by the app.
 - `src/budgeting_app/main.py` – Entry point that launches the app.
-
-## Enabling AI-powered categorisation
-
-The AI classification features call OpenAI's ChatGPT models. To activate them:
-
-1. Create an OpenAI API key from the [OpenAI dashboard](https://platform.openai.com/account/api-keys).
-2. Set the `OPENAI_API_KEY` environment variable **before** launching the app.
-   - PowerShell: `setx OPENAI_API_KEY "sk-..."` and restart your shell.
-   - macOS/Linux: `export OPENAI_API_KEY="sk-..."` in the terminal session that starts the app.
-3. (Optional) Persist the variable in your shell profile (e.g. `$PROFILE`, `~/.bashrc`, or `~/.zshrc`) so future sessions pick it up.
-
-If the key is not configured, the app falls back to a local heuristic classifier and the AI log explains how classifications were produced.
 
 ## Next Steps
 
