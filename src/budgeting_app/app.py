@@ -362,6 +362,8 @@ class BudgetApp(tk.Tk):
         self.ai_start_button.configure(state="disabled")
         self.ai_stop_button.configure(state="normal")
         self._set_status("AI classification started.")
+        self.ai_suggestions.clear()
+        self._apply_ai_suggestions_to_table()
         self.viewmodel.clear_ai_log()
         self.viewmodel.add_ai_log_entry("AI classification started by user.")
         self._refresh_ai_log()
@@ -371,7 +373,6 @@ class BudgetApp(tk.Tk):
         if not self.ai_active:
             return
         self.ai_active = False
-        self.ai_suggestions.clear()
         self.ai_start_button.configure(state="normal")
         self.ai_stop_button.configure(state="disabled")
         if self._ai_stop_event:
@@ -463,9 +464,9 @@ class BudgetApp(tk.Tk):
         categories = list(self.viewmodel.categories_for_table())
         transactions = list(self.viewmodel.transactions_for_table())
 
-        if not self.ai_active:
-            self.ai_suggestions = {}
-        elif not self._suspend_ai_refresh:
+        self._prune_ai_suggestions()
+
+        if self.ai_active and not self._suspend_ai_refresh:
             self._request_ai_refresh()
         self._suspend_ai_refresh = False
 
@@ -498,6 +499,22 @@ class BudgetApp(tk.Tk):
 
         for item_id in tree.get_children(""):
             self._update_ai_row(item_id, self.ai_suggestions.get(item_id))
+
+    def _prune_ai_suggestions(self) -> None:
+        if not self.ai_suggestions:
+            return
+        valid_unassigned = {
+            txn.transaction_id
+            for txn in self.viewmodel.ledger.transactions
+            if txn.transaction_id and not txn.category_id
+        }
+        stale_ids = [
+            transaction_id
+            for transaction_id in list(self.ai_suggestions)
+            if transaction_id not in valid_unassigned
+        ]
+        for transaction_id in stale_ids:
+            self.ai_suggestions.pop(transaction_id, None)
 
     def _update_ai_row(
         self, transaction_id: str, suggestion: ClassificationResult | None
