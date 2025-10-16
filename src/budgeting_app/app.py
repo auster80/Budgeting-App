@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import tkinter as tk
 import urllib.parse
 import webbrowser
+from datetime import datetime
+from decimal import Decimal
+from itertools import cycle
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+import matplotlib.dates as mdates
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle, Wedge
 
 from .ai import ClassificationResult
 from .viewmodels import BudgetViewModel
@@ -25,6 +35,28 @@ class BudgetApp(tk.Tk):
         self.viewmodel = viewmodel
         self.category_lookup: dict[str, str] = {}
         self.category_name_by_id: dict[str, str] = {}
+        self.category_colors: dict[str, str] = {}
+        self._color_palette = cycle(
+            [
+                "#1f77b4",
+                "#ff7f0e",
+                "#2ca02c",
+                "#d62728",
+                "#9467bd",
+                "#8c564b",
+                "#e377c2",
+                "#7f7f7f",
+                "#bcbd22",
+                "#17becf",
+            ]
+        )
+        self._chart_window: tk.Toplevel | None = None
+        self._chart_canvas: FigureCanvasTkAgg | None = None
+        self._chart_figure: Figure | None = None
+        self._chart_type_var: tk.StringVar | None = None
+        self._chart_hover_cid: int | None = None
+        self._chart_artist_labels: dict[object, str] = {}
+        self._chart_annotation = None
         self.status_var = tk.StringVar(value="Ready")
         self.ai_active = False
         self.ai_suggestions: dict[str, ClassificationResult] = {}
@@ -147,9 +179,15 @@ class BudgetApp(tk.Tk):
 
         ttk.Button(
             categories_frame,
+            text="Visualize Actuals",
+            command=self._open_chart_window,
+        ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+
+        ttk.Button(
+            categories_frame,
             text="Delete Selected Category",
             command=self._handle_delete_category,
-        ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
     def _build_transactions_section(self, parent: ttk.Frame) -> None:
         transactions_frame = ttk.Labelframe(parent, text="Transactions", style="Card.TLabelframe")
@@ -291,6 +329,365 @@ class BudgetApp(tk.Tk):
 
         status_bar = ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(12, 4))
         status_bar.pack(fill="x", side="bottom")
+
+    # ------------------------------------------------------------------ #
+    # Colour helpers
+    # ------------------------------------------------------------------ #
+    def _assign_category_colors(self, categories: list[dict[str, str]]) -> None:
+        existing = dict(self.category_colors)
+        self.category_colors.clear()
+        for category in categories:
+            category_id = category["category_id"]
+            if category_id in existing:
+                self.category_colors[category_id] = existing[category_id]
+            else:
+                self.category_colors[category_id] = next(self._color_palette)
+
+    @staticmethod
+    def _lighten_color(hex_color: str, amount: float = 0.6) -> str:
+        amount = max(0.0, min(amount, 1.0))
+        color = hex_color.lstrip("#")
+        if len(color) != 6:
+            return hex_color
+        r = int(color[0:2], 16)
+        g = int(color[2:4], 16)
+        b = int(color[4:6], 16)
+        r = int(r + (255 - r) * amount)
+        g = int(g + (255 - g) * amount)
+        b = int(b + (255 - b) * amount)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    @staticmethod
+    def _get_contrasting_text_color(hex_color: str) -> str:
+        color = hex_color.lstrip("#")
+        if len(color) != 6:
+            return "#000000"
+        r = int(color[0:2], 16) / 255.0
+        g = int(color[2:4], 16) / 255.0
+        b = int(color[4:6], 16) / 255.0
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return "#000000" if luminance > 0.6 else "#ffffff"
+
+    def _apply_category_colors_to_table(self, categories: list[dict[str, str]]) -> None:
+        tree = self.category_table.tree
+        for category in categories:
+            category_id = category["category_id"]
+            color = self.category_colors.get(category_id)
+            if not color:
+                continue
+            background = self._lighten_color(color, amount=0.7)
+            foreground = self._get_contrasting_text_color(background)
+            tag = f"category_{category_id}"
+            tree.tag_configure(tag, background=background, foreground=foreground)
+            tree.item(category_id, tags=(tag,))
+
+    # ------------------------------------------------------------------ #
+    # Chart rendering
+    # ------------------------------------------------------------------ #
+    def _open_chart_window(self) -> None:
+        if self._chart_window and self._chart_window.winfo_exists():
+            self._chart_window.lift()
+            self._refresh_chart()
+            return
+
+        self._chart_window = tk.Toplevel(self)
+        self._chart_window.title("Category Actuals")
+        self._chart_window.geometry("900x620")
+        self._chart_window.protocol("WM_DELETE_WINDOW", self._close_chart_window)
+
+        container = ttk.Frame(self._chart_window, padding=12)
+        container.pack(fill="both", expand=True)
+
+        controls = ttk.Frame(container)
+        controls.pack(fill="x", pady=(0, 12))
+
+        ttk.Label(controls, text="Chart Type:").pack(side="left")
+        self._chart_type_var = tk.StringVar(value="Bar Chart")
+        chart_selector = ttk.Combobox(
+            controls,
+            state="readonly",
+            textvariable=self._chart_type_var,
+            values=["Bar Chart", "Line Chart", "Pie Chart"],
+            width=18,
+        )
+        chart_selector.pack(side="left", padx=(6, 0))
+        chart_selector.bind("<<ComboboxSelected>>", lambda _event: self._render_chart())
+
+        ttk.Button(controls, text="Refresh", command=self._render_chart).pack(
+            side="left", padx=(6, 0)
+        )
+
+        self._chart_figure = Figure(figsize=(6, 4), dpi=100)
+        self._chart_canvas = FigureCanvasTkAgg(self._chart_figure, master=container)
+        canvas_widget = self._chart_canvas.get_tk_widget()
+        canvas_widget.pack(fill="both", expand=True)
+
+        self._chart_artist_labels = {}
+        self._chart_annotation = None
+        self._chart_hover_cid = None
+        self._render_chart()
+
+    def _close_chart_window(self) -> None:
+        if self._chart_window and self._chart_window.winfo_exists():
+            self._chart_window.destroy()
+        self._chart_window = None
+        self._chart_canvas = None
+        self._chart_figure = None
+        self._chart_type_var = None
+        self._chart_artist_labels = {}
+        self._chart_annotation = None
+        self._chart_hover_cid = None
+
+    def _refresh_chart(self) -> None:
+        if not self._chart_window or not self._chart_window.winfo_exists():
+            return
+        self._render_chart()
+
+    def _render_chart(self) -> None:
+        if not self._chart_canvas or not self._chart_figure:
+            return
+
+        categories = list(self.viewmodel.categories_for_table())
+        if categories:
+            self._assign_category_colors(categories)
+
+        chart_type = self._chart_type_var.get() if self._chart_type_var else "Bar Chart"
+        data = self._get_category_chart_data()
+
+        self._chart_figure.clear()
+        ax = self._chart_figure.add_subplot(111)
+        self._chart_artist_labels.clear()
+        self._chart_annotation = None
+
+        if chart_type == "Pie Chart":
+            self._plot_pie_chart(ax, data)
+        elif chart_type == "Line Chart":
+            self._plot_line_chart(ax, data)
+        else:
+            self._plot_bar_chart(ax, data)
+
+        self._chart_canvas.draw_idle()
+        self._connect_chart_hover()
+
+    def _get_category_chart_data(self) -> list[dict[str, object]]:
+        ledger = self.viewmodel.ledger
+        transactions_by_category: dict[str, list] = {}
+        for transaction in ledger.transactions:
+            if not transaction.category_id or transaction.category_id not in ledger.categories:
+                continue
+            transactions_by_category.setdefault(transaction.category_id, []).append(transaction)
+
+        data: list[dict[str, object]] = []
+        for category_id, category in ledger.categories.items():
+            transactions = sorted(
+                transactions_by_category.get(category_id, []),
+                key=lambda txn: txn.occurred_on,
+            )
+            data.append(
+                {
+                    "id": category_id,
+                    "name": category.name,
+                    "actual": float(category.actual_amount),
+                    "color": self.category_colors.get(category_id, "#1f77b4"),
+                    "transactions": transactions,
+                }
+            )
+
+        data.sort(key=lambda entry: entry["name"].lower())
+        return data
+
+    def _plot_bar_chart(self, ax, data: list[dict[str, object]]) -> None:
+        if not data:
+            ax.text(
+                0.5,
+                0.5,
+                "No categories to display",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            return
+
+        names = [entry["name"] for entry in data]
+        amounts = [entry["actual"] for entry in data]
+        colors = [entry["color"] for entry in data]
+        bars = ax.bar(names, amounts, color=colors)
+        ax.set_ylabel("Actual Amount")
+        ax.set_title("Actual Spending by Category")
+        ax.grid(axis="y", linestyle="--", alpha=0.3)
+        ax.tick_params(axis="x", rotation=35)
+
+        for bar, entry in zip(bars, data):
+            self._chart_artist_labels[bar] = entry["name"]
+            height = bar.get_height()
+            ax.annotate(
+                f"{height:.2f}",
+                xy=(bar.get_x() + bar.get_width() / 2, height),
+                xytext=(0, 4),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+
+    def _plot_line_chart(self, ax, data: list[dict[str, object]]) -> None:
+        plotted = False
+        for entry in data:
+            transactions = entry["transactions"]
+            if not transactions:
+                continue
+            cumulative = Decimal("0.00")
+            dates: list[datetime] = []
+            totals: list[float] = []
+            for txn in transactions:
+                try:
+                    txn_date = datetime.fromisoformat(txn.occurred_on)
+                except ValueError:
+                    continue
+                cumulative += txn.amount
+                dates.append(txn_date)
+                totals.append(float(cumulative))
+            if not dates:
+                continue
+            line, = ax.plot(
+                dates,
+                totals,
+                marker="o",
+                linewidth=2,
+                color=entry["color"],
+                label=entry["name"],
+            )
+            self._chart_artist_labels[line] = entry["name"]
+            plotted = True
+
+        if not plotted:
+            ax.text(
+                0.5,
+                0.5,
+                "No transaction history available",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            return
+
+        ax.set_title("Cumulative Actuals Over Time")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Amount")
+        ax.legend(loc="upper left")
+        ax.grid(True, linestyle="--", alpha=0.3)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+        self._chart_figure.autofmt_xdate()
+
+    def _plot_pie_chart(self, ax, data: list[dict[str, object]]) -> None:
+        meaningful = [entry for entry in data if abs(entry["actual"]) > 1e-9]
+        if not meaningful:
+            ax.text(
+                0.5,
+                0.5,
+                "No actual amounts to display",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            return
+
+        values = [abs(entry["actual"]) for entry in meaningful]
+        colors = [entry["color"] for entry in meaningful]
+        wedges, texts, autotexts = ax.pie(
+            values,
+            colors=colors,
+            startangle=90,
+            autopct="%1.1f%%",
+            pctdistance=0.8,
+        )
+        ax.set_title("Category Actual Distribution")
+        ax.axis("equal")
+        ax.legend(
+            wedges,
+            [entry["name"] for entry in meaningful],
+            loc="center left",
+            bbox_to_anchor=(1, 0.5),
+        )
+
+        for text in autotexts:
+            text.set_color("#ffffff")
+            text.set_fontsize(9)
+
+        for wedge, entry in zip(wedges, meaningful):
+            self._chart_artist_labels[wedge] = entry["name"]
+
+    def _connect_chart_hover(self) -> None:
+        if not self._chart_canvas:
+            return
+        if self._chart_hover_cid is not None:
+            self._chart_canvas.mpl_disconnect(self._chart_hover_cid)
+        self._chart_hover_cid = self._chart_canvas.mpl_connect(
+            "motion_notify_event", self._on_chart_hover
+        )
+
+    def _on_chart_hover(self, event) -> None:
+        if not self._chart_canvas or not self._chart_figure:
+            return
+        if not event.inaxes:
+            self._hide_chart_annotation()
+            return
+
+        for artist, label in self._chart_artist_labels.items():
+            contains, details = artist.contains(event)
+            if not contains:
+                continue
+            x = event.xdata
+            y = event.ydata
+            if isinstance(artist, Line2D):
+                indices = details.get("ind", []) if isinstance(details, dict) else []
+                if indices:
+                    index = indices[0]
+                    x = artist.get_xdata()[index]
+                    y = artist.get_ydata()[index]
+            elif isinstance(artist, Rectangle):
+                x = artist.get_x() + artist.get_width() / 2
+                y = artist.get_y() + artist.get_height()
+            elif isinstance(artist, Wedge):
+                theta = math.radians((artist.theta1 + artist.theta2) / 2)
+                radius = artist.r * 0.7
+                x = artist.center[0] + radius * math.cos(theta)
+                y = artist.center[1] + radius * math.sin(theta)
+            self._show_chart_annotation(label, x, y)
+            return
+
+        self._hide_chart_annotation()
+
+    def _show_chart_annotation(self, label: str, x: float | None, y: float | None) -> None:
+        if not self._chart_canvas or not self._chart_figure:
+            return
+        ax = self._chart_figure.axes[0]
+        if x is None or y is None:
+            return
+        if self._chart_annotation is None:
+            self._chart_annotation = ax.annotate(
+                label,
+                xy=(x, y),
+                xytext=(12, 12),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", fc="#fdfdfd", ec="#333333", lw=0.5),
+                arrowprops=dict(arrowstyle="->", color="#333333", lw=0.5),
+            )
+        else:
+            self._chart_annotation.xy = (x, y)
+            self._chart_annotation.set_text(label)
+            self._chart_annotation.set_position((12, 12))
+        self._chart_annotation.set_visible(True)
+        self._chart_canvas.draw_idle()
+
+    def _hide_chart_annotation(self) -> None:
+        if self._chart_annotation and self._chart_annotation.get_visible():
+            self._chart_annotation.set_visible(False)
+            if self._chart_canvas:
+                self._chart_canvas.draw_idle()
 
     # ------------------------------------------------------------------ #
     # Event handlers
@@ -497,6 +894,8 @@ class BudgetApp(tk.Tk):
         self._suspend_ai_refresh = False
 
         self.category_table.populate(categories, key_field="category_id")
+        self._assign_category_colors(categories)
+        self._apply_category_colors_to_table(categories)
         self.transaction_table.populate(transactions, key_field="transaction_id")
         self._apply_ai_suggestions_to_table()
 
@@ -513,6 +912,7 @@ class BudgetApp(tk.Tk):
         self._set_status("Budget data loaded.")
         self._refresh_ai_log()
         self._update_transaction_actions_state()
+        self._refresh_chart()
 
     def _apply_ai_suggestions_to_table(self) -> None:
         """Populate the AI suggestion column for the rendered transactions."""
