@@ -8,4 +8,5 @@ __all__ = [
     "widgets",
     "csv_importer",
     "text_utils",
+    "ai",
 ]

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from .ai import ClassificationResult
 from .viewmodels import BudgetViewModel
 from .widgets import CurrencyEntry, LabeledEntry, Table
 
@@ -20,7 +22,15 @@ class BudgetApp(tk.Tk):
         self.resizable(True, True)
         self.viewmodel = viewmodel
         self.category_lookup: dict[str, str] = {}
+        self.category_name_by_id: dict[str, str] = {}
         self.status_var = tk.StringVar(value="Ready")
+        self.ai_active = False
+        self.ai_suggestions: dict[str, ClassificationResult] = {}
+        self.ai_log_visible = False
+        self._ai_worker_thread: threading.Thread | None = None
+        self._ai_stop_event: threading.Event | None = None
+        self._ai_refresh_pending = False
+        self._suspend_ai_refresh = False
 
         self._configure_styles()
         self._build_menu()
@@ -121,6 +131,7 @@ class BudgetApp(tk.Tk):
         )
         self.category_table.grid(row=1, column=0, sticky="nsew")
         categories_frame.rowconfigure(1, weight=1)
+        self.category_table.tree.bind("<<TreeviewSelect>>", self._handle_category_selection)
 
         ttk.Button(
             categories_frame,
@@ -173,6 +184,11 @@ class BudgetApp(tk.Tk):
                 "account",
                 "category",
                 "amount",
+                "account",
+                "category",
+                "amount",
+                "suggestion",
+                "apply",
             ),
             headings={
                 "occurred_on": "Date",
@@ -181,9 +197,18 @@ class BudgetApp(tk.Tk):
                 "account": "Account",
                 "category": "Category",
                 "amount": "Amount",
+                "suggestion": "AI Suggestion",
+                "apply": "",
+            },
+            selectmode="extended",
+            column_options={
+                "amount": {"width": 100, "anchor": "e", "stretch": False},
+                "apply": {"width": 60, "anchor": "center", "stretch": False},
+                "suggestion": {"width": 160},
             },
         )
         self.transaction_table.grid(row=2, column=0, sticky="nsew")
+        self.transaction_table.tree.bind("<ButtonRelease-1>", self._handle_transaction_click)
         transactions_frame.rowconfigure(2, weight=1)
 
         assign_frame = ttk.Frame(transactions_frame)
@@ -198,11 +223,51 @@ class BudgetApp(tk.Tk):
             command=self._handle_assign_transaction_category,
         ).grid(row=0, column=2)
 
+        self.ai_start_button = ttk.Button(
+            assign_frame,
+            text="Start AI Categorisation",
+            command=self._start_ai_classification,
+        )
+        self.ai_start_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        self.ai_stop_button = ttk.Button(
+            assign_frame,
+            text="Stop AI Categorisation",
+            command=self._stop_ai_classification,
+            state="disabled",
+        )
+        self.ai_stop_button.grid(row=1, column=2, sticky="ew", pady=(6, 0))
+
+        self.ai_log_button = ttk.Button(
+            assign_frame,
+            text="Show AI Log",
+            command=self._toggle_ai_log,
+        )
+        self.ai_log_button.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+
+        self.ai_log_frame = ttk.Labelframe(
+            transactions_frame,
+            text="AI Classification Log",
+            style="Card.TLabelframe",
+        )
+        self.ai_log_frame.grid(row=4, column=0, sticky="nsew", pady=(6, 0))
+        self.ai_log_frame.columnconfigure(0, weight=1)
+        self.ai_log_text = scrolledtext.ScrolledText(
+            self.ai_log_frame,
+            height=10,
+            wrap="word",
+            state="disabled",
+            font=("Consolas", 10),
+        )
+        self.ai_log_text.grid(row=0, column=0, sticky="nsew")
+        self.ai_log_frame.rowconfigure(0, weight=1)
+        self.ai_log_frame.grid_remove()
+
         ttk.Button(
             transactions_frame,
             text="Delete Selected Transaction",
             command=self._handle_delete_transaction,
-        ).grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        ).grid(row=5, column=0, sticky="ew", pady=(6, 0))
 
         status_bar = ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(12, 4))
         status_bar.pack(fill="x", side="bottom")
@@ -288,13 +353,84 @@ class BudgetApp(tk.Tk):
         if not category_id:
             messagebox.showerror("Unknown Category", "Select a valid category.")
             return
-        transaction_id = selected[0]
         try:
-            self.viewmodel.set_transaction_category(transaction_id, category_id)
-            self.assign_category_input.set("")
-            self._set_status("Transaction category updated.")
+            self.viewmodel.set_transactions_category(selected, category_id)
+            self.transaction_table.tree.selection_set(())
+            count = len(selected)
+            label = "transaction" if count == 1 else "transactions"
+            self._set_status(f"Assigned category to {count} {label}.")
         except KeyError as exc:  # noqa: BLE001
             messagebox.showerror("Error", str(exc))
+
+    def _start_ai_classification(self) -> None:
+        if self.ai_active:
+            return
+        self.ai_active = True
+        self.ai_start_button.configure(state="disabled")
+        self.ai_stop_button.configure(state="normal")
+        self._set_status("AI classification started.")
+        self.ai_suggestions.clear()
+        self._apply_ai_suggestions_to_table()
+        self.viewmodel.clear_ai_log()
+        self.viewmodel.add_ai_log_entry("AI classification started by user.")
+        self._refresh_ai_log()
+        self._request_ai_refresh()
+
+    def _stop_ai_classification(self) -> None:
+        if not self.ai_active:
+            return
+        self.ai_active = False
+        self.ai_start_button.configure(state="normal")
+        self.ai_stop_button.configure(state="disabled")
+        if self._ai_stop_event:
+            self._ai_stop_event.set()
+        if self._ai_worker_thread and self._ai_worker_thread.is_alive():
+            self._ai_worker_thread.join(timeout=1.0)
+        self._ai_worker_thread = None
+        self._ai_stop_event = None
+        self._ai_refresh_pending = False
+        self._on_data_changed(self.viewmodel.ledger)
+        self.viewmodel.add_ai_log_entry("AI classification stopped by user.")
+        self._refresh_ai_log()
+        self._set_status("AI classification stopped.")
+
+    def _handle_transaction_click(self, event) -> None:
+        tree = self.transaction_table.tree
+        region = tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        column = tree.identify_column(event.x)
+        try:
+            column_index = int(column.replace("#", "")) - 1
+        except ValueError:
+            return
+        columns = tree["columns"]
+        if column_index < 0 or column_index >= len(columns):
+            return
+        if columns[column_index] != "apply":
+            return
+        item_id = tree.identify_row(event.y)
+        if not item_id:
+            return
+        suggestion = self.ai_suggestions.get(item_id)
+        if not suggestion:
+            return
+        self._accept_ai_suggestion(item_id, suggestion.category_name)
+
+    def _accept_ai_suggestion(self, transaction_id: str, category_name: str) -> None:
+        try:
+            created = self.viewmodel.accept_ai_suggestion(transaction_id, category_name)
+        except Exception as exc:  # noqa: BLE001 - user-friendly message
+            messagebox.showerror("Error", str(exc))
+            return
+
+        if created:
+            self._set_status(
+                f"Created category '{category_name}' and assigned it to the transaction."
+            )
+        else:
+            self._set_status(f"Assigned suggested category '{category_name}'.")
+        self.ai_suggestions.pop(transaction_id, None)
 
     def _handle_import_csv(self) -> None:
         file_path = filedialog.askopenfilename(
@@ -333,8 +469,15 @@ class BudgetApp(tk.Tk):
         categories = list(self.viewmodel.categories_for_table())
         transactions = list(self.viewmodel.transactions_for_table())
 
+        self._prune_ai_suggestions()
+
+        if self.ai_active and not self._suspend_ai_refresh:
+            self._request_ai_refresh()
+        self._suspend_ai_refresh = False
+
         self.category_table.populate(categories, key_field="category_id")
         self.transaction_table.populate(transactions, key_field="transaction_id")
+        self._apply_ai_suggestions_to_table()
 
         planned_total = sum(float(row["planned"]) for row in categories)
         actual_total = sum(float(row["actual"]) for row in categories)
@@ -343,9 +486,88 @@ class BudgetApp(tk.Tk):
         self.remaining_total_var.set(f"{(planned_total - actual_total):.2f}")
 
         self.category_lookup = {row["name"]: row["category_id"] for row in categories}
+        self.category_name_by_id = {row["category_id"]: row["name"] for row in categories}
         self.txn_category_input.configure(values=list(self.category_lookup.keys()))
         self.assign_category_input.configure(values=list(self.category_lookup.keys()))
         self._set_status("Budget data loaded.")
+        self._refresh_ai_log()
+
+    def _apply_ai_suggestions_to_table(self) -> None:
+        """Populate the AI suggestion column for the rendered transactions."""
+
+        if not hasattr(self, "transaction_table"):
+            return
+
+        tree = self.transaction_table.tree
+        columns = set(tree["columns"])
+        if "suggestion" not in columns or "apply" not in columns:
+            return
+
+        for item_id in tree.get_children(""):
+            self._update_ai_row(item_id, self.ai_suggestions.get(item_id))
+
+    def _prune_ai_suggestions(self) -> None:
+        if not self.ai_suggestions:
+            return
+        valid_unassigned = {
+            txn.transaction_id
+            for txn in self.viewmodel.ledger.transactions
+            if txn.transaction_id and not txn.category_id
+        }
+        stale_ids = [
+            transaction_id
+            for transaction_id in list(self.ai_suggestions)
+            if transaction_id not in valid_unassigned
+        ]
+        for transaction_id in stale_ids:
+            self.ai_suggestions.pop(transaction_id, None)
+
+    def _update_ai_row(
+        self, transaction_id: str, suggestion: ClassificationResult | None
+    ) -> None:
+        if not hasattr(self, "transaction_table"):
+            return
+        tree = self.transaction_table.tree
+        if not tree.exists(transaction_id):
+            return
+        if suggestion:
+            tree.set(transaction_id, "suggestion", self._format_ai_suggestion(suggestion))
+            tree.set(transaction_id, "apply", "✅")
+        else:
+            tree.set(transaction_id, "suggestion", "")
+            tree.set(transaction_id, "apply", "")
+
+    @staticmethod
+    def _format_ai_suggestion(suggestion: ClassificationResult) -> str:
+        return f"{suggestion.category_name} ({suggestion.confidence:.0%})"
+
+    def _on_partial_ai_suggestion(
+        self, transaction_id: str, suggestion: ClassificationResult
+    ) -> None:
+        if not self.ai_active:
+            return
+        if not self._transaction_is_unassigned(transaction_id):
+            self.ai_suggestions.pop(transaction_id, None)
+            self._update_ai_row(transaction_id, None)
+            return
+        self.ai_suggestions[transaction_id] = suggestion
+        self._update_ai_row(transaction_id, suggestion)
+
+    def _transaction_is_unassigned(self, transaction_id: str) -> bool:
+        for txn in self.viewmodel.ledger.transactions:
+            if txn.transaction_id == transaction_id:
+                return not txn.category_id
+        return False
+
+    def _handle_category_selection(self, _event) -> None:
+        selected = self.category_table.tree.selection()
+        if not selected:
+            return
+        category_id = selected[0]
+        category_name = self.category_name_by_id.get(category_id)
+        if not category_name:
+            return
+        self.assign_category_input.set(category_name)
 
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
@@ -370,6 +592,103 @@ class BudgetApp(tk.Tk):
 
     def _set_status(self, message: str) -> None:
         self.status_var.set(message)
+
+    def _toggle_ai_log(self) -> None:
+        self.ai_log_visible = not self.ai_log_visible
+        if self.ai_log_visible:
+            self.ai_log_frame.grid()
+            self.ai_log_button.configure(text="Hide AI Log")
+            self._refresh_ai_log()
+        else:
+            self.ai_log_frame.grid_remove()
+            self.ai_log_button.configure(text="Show AI Log")
+
+    def _refresh_ai_log(self) -> None:
+        if not hasattr(self, "ai_log_text"):
+            return
+        entries = self.viewmodel.get_ai_log()
+        self.ai_log_text.configure(state="normal")
+        self.ai_log_text.delete("1.0", tk.END)
+        if entries:
+            self.ai_log_text.insert("1.0", "\n".join(entries) + "\n")
+        self.ai_log_text.configure(state="disabled")
+        if self.ai_log_visible:
+            self.ai_log_text.see(tk.END)
+
+    def _request_ai_refresh(self) -> None:
+        if not self.ai_active:
+            return
+        self._ai_refresh_pending = True
+        if not self._ai_worker_thread or not self._ai_worker_thread.is_alive():
+            self._launch_ai_worker()
+
+    def _launch_ai_worker(self) -> None:
+        if not self.ai_active or not self._ai_refresh_pending:
+            return
+        stop_event = threading.Event()
+        self._ai_stop_event = stop_event
+        self._ai_refresh_pending = False
+
+        def worker() -> None:
+            collected: dict[str, ClassificationResult] = {}
+
+            def log_message(message: str) -> None:
+                self.viewmodel.add_ai_log_entry(message)
+                self.after(0, self._refresh_ai_log)
+
+            def should_abort() -> bool:
+                return stop_event.is_set() or not self.ai_active
+
+            def handle_suggestion(transaction_id: str, result: ClassificationResult) -> None:
+                collected[transaction_id] = result
+                self.after(
+                    0,
+                    lambda tid=transaction_id, res=result: self._on_partial_ai_suggestion(
+                        tid, res
+                    ),
+                )
+
+            try:
+                suggestions = self.viewmodel.suggest_categories_for_unassigned(
+                    logger=log_message,
+                    should_abort=should_abort,
+                    on_suggestion=handle_suggestion,
+                )
+            except Exception as exc:  # noqa: BLE001 - surface unexpected failures
+                self.viewmodel.add_ai_log_entry(f"AI classification error: {exc}")
+                suggestions = {}
+            finally:
+                self.after(0, self._refresh_ai_log)
+
+            if should_abort():
+                self.after(0, lambda: self._on_ai_worker_finished(collected, stop_event))
+                return
+
+            final_results = suggestions or collected
+            self.after(0, lambda: self._on_ai_worker_finished(final_results, stop_event))
+
+        thread = threading.Thread(target=worker, daemon=True)
+        self._ai_worker_thread = thread
+        thread.start()
+
+    def _on_ai_worker_finished(
+        self, suggestions: dict[str, ClassificationResult], stop_event: threading.Event
+    ) -> None:
+        if self._ai_stop_event is stop_event and self.ai_active:
+            filtered = {
+                txn_id: result
+                for txn_id, result in suggestions.items()
+                if self._transaction_is_unassigned(txn_id)
+            }
+            self.ai_suggestions = filtered
+            self._suspend_ai_refresh = True
+            self._on_data_changed(self.viewmodel.ledger)
+
+        if self._ai_stop_event is stop_event:
+            self._ai_worker_thread = None
+            self._ai_stop_event = None
+            if self.ai_active and self._ai_refresh_pending:
+                self._launch_ai_worker()
 
 def run_app(data_file: str | None = None) -> None:
     """Convenience helper to start the Tkinter loop."""
