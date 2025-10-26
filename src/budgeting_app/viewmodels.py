@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
@@ -448,65 +449,82 @@ class BudgetViewModel:
         self,
         path: str | Path,
         *,
-        prompt_for_saldo: Callable[[Decimal], Optional[Decimal]],
-        confirm_replacement: Callable[[Transaction, Decimal], bool],
+        confirm_replacement: Callable[[Transaction, CSVTransaction], bool],
     ) -> int:
-        """Import a credit-card statement and replace the matching counterbooking."""
+        """Import a credit-card statement and replace matching counterbookings."""
 
         statement_rows = read_credit_card_statement(path)
         if not statement_rows:
             return 0
 
-        net_change = sum((row.amount for row in statement_rows), Decimal("0.00"))
-        net_change = net_change.quantize(Decimal("0.01"))
+        match_window = timedelta(days=3)
+        matched_transaction_ids: set[str] = set()
+        counterbookings: list[tuple[Transaction, CSVTransaction]] = []
+        quantize_amount = Decimal("0.01")
 
-        saldo = prompt_for_saldo(net_change)
-        if saldo is None:
-            return 0
-        saldo = saldo.quantize(Decimal("0.01"))
-        open_balance = (saldo - net_change).quantize(Decimal("0.01"))
+        existing_transactions = list(self.ledger.transactions)
+        for record in statement_rows:
+            ledger_amount = (-record.amount).quantize(quantize_amount)
+            record_date = date.fromisoformat(record.occurred_on)
+            for txn in existing_transactions:
+                if txn.transaction_id in matched_transaction_ids:
+                    continue
+                if record.reference and txn.reference == record.reference:
+                    continue
+                if txn.amount.quantize(quantize_amount) != ledger_amount:
+                    continue
+                txn_date = date.fromisoformat(txn.occurred_on)
+                if abs((txn_date - record_date).days) <= match_window.days:
+                    counterbookings.append((txn, record))
+                    matched_transaction_ids.add(txn.transaction_id)
+                    break
 
-        counter_txn: Optional[Transaction] = None
-        if open_balance != Decimal("0.00"):
-            for txn in self.ledger.transactions:
-                if txn.amount.quantize(Decimal("0.01")) == -open_balance:
-                    counter_txn = txn
-                    break
-                if txn.amount.copy_abs().quantize(Decimal("0.01")) == open_balance:
-                    counter_txn = txn
-                    break
-            if counter_txn is not None:
-                if not confirm_replacement(counter_txn, open_balance):
-                    return 0
-                self.ledger.transactions = [
-                    txn
-                    for txn in self.ledger.transactions
-                    if txn.transaction_id != counter_txn.transaction_id
-                ]
-                self.ledger.detect_internal_transfers()
-                self.ledger.recalculate_actuals()
+        removed_ids: set[str] = set()
+        for txn, record in counterbookings:
+            if confirm_replacement(txn, record):
+                removed_ids.add(txn.transaction_id)
+
+        if removed_ids:
+            self.ledger.transactions = [
+                txn
+                for txn in self.ledger.transactions
+                if txn.transaction_id not in removed_ids
+            ]
+            self.ledger.detect_internal_transfers()
+            self.ledger.recalculate_actuals()
 
         imported = 0
         transfer_category_id: Optional[str] = None
         positive_transactions: List[Transaction] = []
 
+        existing_reference_amounts = {
+            txn.reference: txn.amount.quantize(quantize_amount)
+            for txn in self.ledger.transactions
+            if txn.reference
+        }
+
         default_account_id = statement_rows[0].account_id or "CREDIT-CARD"
         default_account_name = statement_rows[0].account_name or "Credit Card"
 
         for record in statement_rows:
-            ledger_amount = (-record.amount).quantize(Decimal("0.01"))
+            ledger_amount = (-record.amount).quantize(quantize_amount)
+            if record.reference:
+                existing_amount = existing_reference_amounts.get(record.reference)
+                if existing_amount is not None and existing_amount == ledger_amount:
+                    continue
             txn = self.ledger.record_transaction(
                 description=record.description,
                 amount=ledger_amount,
                 category_id=None,
                 occurred_on=record.occurred_on,
-                transaction_id=record.reference,
                 account_id=record.account_id or default_account_id,
                 account_name=record.account_name or default_account_name,
                 counterparty=record.counterparty,
                 reference=record.reference,
                 company=record.company,
             )
+            if record.reference:
+                existing_reference_amounts[record.reference] = ledger_amount
             if ledger_amount > 0:
                 if transfer_category_id is None:
                     transfer_category_id = self._get_transfer_category_id()
@@ -520,6 +538,6 @@ class BudgetViewModel:
         elif imported:
             self.ledger.recalculate_actuals()
 
-        if imported:
+        if imported or removed_ids:
             self._notify()
         return imported

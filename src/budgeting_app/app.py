@@ -6,12 +6,12 @@ import threading
 import tkinter as tk
 import urllib.parse
 import webbrowser
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
-from typing import Optional
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .ai import ClassificationResult
+from .csv_importer import CSVTransaction
 from .models import Transaction
 from .viewmodels import BudgetViewModel, CSVImportPreview
 from .widgets import CurrencyEntry, LabeledEntry, Table
@@ -544,53 +544,29 @@ class BudgetApp(tk.Tk):
             f"skipped {preview.duplicate_count} duplicates."
         )
 
-    def _prompt_credit_card_saldo(self, net_change: Decimal) -> Optional[Decimal]:
-        message = (
-            "Enter the latest credit card saldo (amount owed after this statement).\n\n"
-            f"Net change detected in the statement: {net_change:.2f}."
-        )
-        while True:
-            value = simpledialog.askstring(
-                "Credit Card Saldo",
-                message,
-                parent=self,
-            )
-            if value is None:
-                return None
-            normalized = value.strip().replace("\u00a0", "").replace(",", ".")
-            if not normalized:
-                messagebox.showinfo(
-                    "Missing Saldo",
-                    "Please provide the saldo or cancel the import.",
-                    parent=self,
-                )
-                continue
-            try:
-                return Decimal(normalized)
-            except InvalidOperation:
-                messagebox.showerror(
-                    "Invalid Amount",
-                    "Saldo must be a valid number (use '.' as decimal separator).",
-                    parent=self,
-                )
-
     def _confirm_credit_card_replacement(
-        self, transaction: Transaction, open_balance: Decimal
+        self, transaction: Transaction, record: CSVTransaction
     ) -> bool:
+        statement_amount = (-record.amount).quantize(Decimal("0.01"))
         description = (
-            "The statement's opening saldo is {open_balance:.2f}.\n\n"
-            "This matches the existing transaction:\n"
-            "{date} - {desc}\n"
-            "Amount: {amount:.2f}\n\n"
-            "Replace this transaction with the detailed credit card statement?"
+            "A potential counterbooking was found in your ledger.\n\n"
+            "Existing transaction:\n"
+            "{txn_date} - {txn_desc}\n"
+            "Amount: {txn_amount:.2f}\n\n"
+            "Statement entry:\n"
+            "{record_date} - {record_desc}\n"
+            "Amount: {record_amount:.2f}\n\n"
+            "Do you want to remove the ledger transaction?"
         ).format(
-            open_balance=open_balance,
-            date=transaction.occurred_on,
-            desc=transaction.description,
-            amount=transaction.amount,
+            txn_date=transaction.occurred_on,
+            txn_desc=transaction.description,
+            txn_amount=transaction.amount,
+            record_date=record.occurred_on,
+            record_desc=record.description,
+            record_amount=statement_amount,
         )
         return messagebox.askyesno(
-            "Replace Counterbooking", description, icon="question", default="yes", parent=self
+            "Remove Counterbooking", description, icon="question", default="yes", parent=self
         )
 
     def _handle_import_credit_card_statement(self) -> None:
@@ -605,7 +581,6 @@ class BudgetApp(tk.Tk):
         try:
             imported = self.viewmodel.import_credit_card_statement(
                 file_path,
-                prompt_for_saldo=self._prompt_credit_card_saldo,
                 confirm_replacement=self._confirm_credit_card_replacement,
             )
         except Exception as exc:  # noqa: BLE001

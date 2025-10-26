@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from budgeting_app.csv_importer import read_credit_card_statement
+from budgeting_app.csv_importer import CSVTransaction, read_credit_card_statement
 from budgeting_app.models import BudgetLedger
 from budgeting_app.viewmodels import BudgetViewModel
 
@@ -50,49 +50,62 @@ def test_read_credit_card_statement_parses_rows(tmp_path: Path) -> None:
     assert transactions[1].amount == Decimal("-50.00")
 
 
-def test_import_credit_card_statement_replaces_counterbooking(tmp_path: Path) -> None:
+def test_import_credit_card_statement_replaces_counterbookings(tmp_path: Path) -> None:
     csv_path = _write_sample_credit_card_csv(tmp_path)
 
     ledger = BudgetLedger()
     payment_category = ledger.add_category("Credit Card Payment", Decimal("0.00")).category_id
-    counter_txn = ledger.record_transaction(
-        description="Credit Card Payment",
-        amount=Decimal("-200.00"),
-        category_id=payment_category,
-        occurred_on="2024-03-05",
-        transaction_id="PAY-001",
-        account_id="NL00BANK0123456789",
-        account_name="Main Account",
-        reference="PAY-001",
-    )
+    existing = [
+        ledger.record_transaction(
+            description="Card charge",
+            amount=Decimal("-300.00"),
+            category_id=payment_category,
+            occurred_on="2024-03-02",
+            transaction_id="BANK-1",
+        ),
+        ledger.record_transaction(
+            description="Card refund",
+            amount=Decimal("50.00"),
+            category_id=payment_category,
+            occurred_on="2024-03-04",
+            transaction_id="BANK-2",
+        ),
+        ledger.record_transaction(
+            description="Card payment",
+            amount=Decimal("200.00"),
+            category_id=payment_category,
+            occurred_on="2024-03-05",
+            transaction_id="BANK-3",
+        ),
+        ledger.record_transaction(
+            description="Coffee shop",
+            amount=Decimal("-20.00"),
+            category_id=payment_category,
+            occurred_on="2024-03-06",
+            transaction_id="BANK-4",
+        ),
+    ]
 
     viewmodel = BudgetViewModel()
     viewmodel.ledger = ledger
 
-    prompt_calls: list[Decimal] = []
+    confirm_calls: list[tuple[str, CSVTransaction]] = []
 
-    def prompt_for_saldo(net_change: Decimal) -> Decimal:
-        prompt_calls.append(net_change)
-        return Decimal("270.00")
-
-    confirm_calls: list[tuple[str, Decimal]] = []
-
-    def confirm_replacement(transaction, open_balance: Decimal) -> bool:
-        confirm_calls.append((transaction.transaction_id, open_balance))
+    def confirm_replacement(transaction, record: CSVTransaction) -> bool:
+        confirm_calls.append((transaction.transaction_id, record))
         return True
 
     imported = viewmodel.import_credit_card_statement(
         csv_path,
-        prompt_for_saldo=prompt_for_saldo,
         confirm_replacement=confirm_replacement,
     )
 
     assert imported == 4
-    assert prompt_calls == [Decimal("70.00")]
-    assert confirm_calls == [(counter_txn.transaction_id, Decimal("200.00"))]
+    assert {call[0] for call in confirm_calls} == {txn.transaction_id for txn in existing}
 
     transaction_ids = {txn.transaction_id for txn in viewmodel.ledger.transactions}
-    assert counter_txn.transaction_id not in transaction_ids
+    for txn in existing:
+        assert txn.transaction_id not in transaction_ids
 
     by_reference = {txn.reference: txn for txn in viewmodel.ledger.transactions}
     assert by_reference["CC1"].amount == Decimal("-300.00")
@@ -120,12 +133,6 @@ def test_import_credit_card_statement_without_matching_counterbooking(tmp_path: 
     viewmodel = BudgetViewModel()
     viewmodel.ledger = ledger
 
-    prompt_calls: list[Decimal] = []
-
-    def prompt_for_saldo(net_change: Decimal) -> Decimal:
-        prompt_calls.append(net_change)
-        return Decimal("500.00")
-
     confirm_called = False
 
     def confirm_replacement(*_args, **_kwargs) -> bool:  # pragma: no cover - should not be called
@@ -135,12 +142,10 @@ def test_import_credit_card_statement_without_matching_counterbooking(tmp_path: 
 
     imported = viewmodel.import_credit_card_statement(
         csv_path,
-        prompt_for_saldo=prompt_for_saldo,
         confirm_replacement=confirm_replacement,
     )
 
     assert imported == 4
-    assert prompt_calls == [Decimal("70.00")]
     assert confirm_called is False
 
     by_reference = {txn.reference: txn for txn in viewmodel.ledger.transactions}
@@ -148,3 +153,32 @@ def test_import_credit_card_statement_without_matching_counterbooking(tmp_path: 
     assert by_reference["CC4"].amount == Decimal("-20.00")
     assert by_reference["CC2"].amount == Decimal("50.00")
     assert by_reference["CC3"].amount == Decimal("200.00")
+
+
+def test_import_credit_card_statement_skips_existing_references(tmp_path: Path) -> None:
+    csv_path = _write_sample_credit_card_csv(tmp_path)
+
+    ledger = BudgetLedger()
+    viewmodel = BudgetViewModel()
+    viewmodel.ledger = ledger
+
+    imported_first = viewmodel.import_credit_card_statement(
+        csv_path,
+        confirm_replacement=lambda *_args: True,
+    )
+    assert imported_first == 4
+
+    confirm_called = False
+
+    def confirm_replacement(*_args, **_kwargs) -> bool:  # pragma: no cover - should not be called
+        nonlocal confirm_called
+        confirm_called = True
+        return False
+
+    imported_second = viewmodel.import_credit_card_statement(
+        csv_path,
+        confirm_replacement=confirm_replacement,
+    )
+
+    assert imported_second == 0
+    assert confirm_called is False
