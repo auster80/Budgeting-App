@@ -462,6 +462,7 @@ class BudgetViewModel:
         counterbookings: list[tuple[Transaction, CSVTransaction]] = []
         quantize_amount = Decimal("0.01")
 
+        default_card_account_id = statement_rows[0].account_id or "CREDIT-CARD"
         existing_transactions = list(self.ledger.transactions)
         for record in statement_rows:
             statement_amount = record.amount.quantize(quantize_amount)
@@ -469,6 +470,7 @@ class BudgetViewModel:
                 continue
             ledger_amount = (-statement_amount).quantize(quantize_amount)
             record_date = date.fromisoformat(record.occurred_on)
+            record_account_id = record.account_id or default_card_account_id
             for txn in existing_transactions:
                 if txn.transaction_id in matched_transaction_ids:
                     continue
@@ -476,6 +478,9 @@ class BudgetViewModel:
                     continue
                 txn_amount = txn.amount.quantize(quantize_amount)
                 if txn_amount == 0:
+                    continue
+                txn_account_id = (txn.account_id or "").strip()
+                if txn_account_id in {record_account_id, default_card_account_id}:
                     continue
                 if txn_amount != ledger_amount:
                     continue
@@ -509,7 +514,7 @@ class BudgetViewModel:
             if txn.reference
         }
 
-        default_account_id = statement_rows[0].account_id or "CREDIT-CARD"
+        default_account_id = default_card_account_id
         default_account_name = statement_rows[0].account_name or "Credit Card"
 
         for record in statement_rows:

@@ -547,7 +547,7 @@ class BudgetApp(tk.Tk):
     def _confirm_credit_card_replacement(
         self, transaction: Transaction, record: CSVTransaction
     ) -> bool:
-        statement_amount = (-record.amount).quantize(Decimal("0.01"))
+        statement_amount = record.amount.quantize(Decimal("0.01"))
         description = (
             "A potential counterbooking was found in your ledger.\n\n"
             "Existing transaction:\n"
