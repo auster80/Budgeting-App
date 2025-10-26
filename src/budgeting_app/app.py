@@ -526,7 +526,13 @@ class BudgetApp(tk.Tk):
             return
 
         for item_id in tree.get_children(""):
-            self._update_ai_row(item_id, self.ai_suggestions.get(item_id))
+            self._update_ai_row(
+                item_id,
+                self.ai_suggestions.get(item_id),
+                resort=False,
+            )
+
+        self.transaction_table.resort()
 
     def _prune_ai_suggestions(self) -> None:
         if not self.ai_suggestions:
@@ -545,7 +551,11 @@ class BudgetApp(tk.Tk):
             self.ai_suggestions.pop(transaction_id, None)
 
     def _update_ai_row(
-        self, transaction_id: str, suggestion: ClassificationResult | None
+        self,
+        transaction_id: str,
+        suggestion: ClassificationResult | None,
+        *,
+        resort: bool = True,
     ) -> None:
         if not hasattr(self, "transaction_table"):
             return
@@ -558,6 +568,9 @@ class BudgetApp(tk.Tk):
         else:
             tree.set(transaction_id, "suggestion", "")
             tree.set(transaction_id, "apply", "")
+
+        if resort:
+            self.transaction_table.resort()
 
     @staticmethod
     def _format_ai_suggestion(suggestion: ClassificationResult) -> str:

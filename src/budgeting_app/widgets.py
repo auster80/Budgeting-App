@@ -116,6 +116,11 @@ class Table(ttk.Frame):
             self._sort_reverse = False
         self._apply_sort()
 
+    def resort(self) -> None:
+        """Reapply the current sort order, if any."""
+
+        self._apply_sort()
+
     def _apply_sort(self) -> None:
         if not self._sort_column:
             self._update_heading_indicators()
