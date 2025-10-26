@@ -475,17 +475,16 @@ class BudgetViewModel:
                 if txn.amount.copy_abs().quantize(Decimal("0.01")) == open_balance:
                     counter_txn = txn
                     break
-            if counter_txn is None:
-                raise ValueError(
-                    f"No existing transaction matches the opening saldo of {open_balance:.2f} to replace."
-                )
-            if not confirm_replacement(counter_txn, open_balance):
-                return 0
-            self.ledger.transactions = [
-                txn for txn in self.ledger.transactions if txn.transaction_id != counter_txn.transaction_id
-            ]
-            self.ledger.detect_internal_transfers()
-            self.ledger.recalculate_actuals()
+            if counter_txn is not None:
+                if not confirm_replacement(counter_txn, open_balance):
+                    return 0
+                self.ledger.transactions = [
+                    txn
+                    for txn in self.ledger.transactions
+                    if txn.transaction_id != counter_txn.transaction_id
+                ]
+                self.ledger.detect_internal_transfers()
+                self.ledger.recalculate_actuals()
 
         imported = 0
         transfer_category_id: Optional[str] = None

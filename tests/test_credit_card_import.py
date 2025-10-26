@@ -111,3 +111,40 @@ def test_import_credit_card_statement_replaces_counterbooking(tmp_path: Path) ->
 
     assert viewmodel.ledger.categories[payment_category].actual_amount == Decimal("0.00")
     assert len(viewmodel.ledger.transactions) == 4
+
+
+def test_import_credit_card_statement_without_matching_counterbooking(tmp_path: Path) -> None:
+    csv_path = _write_sample_credit_card_csv(tmp_path)
+
+    ledger = BudgetLedger()
+    viewmodel = BudgetViewModel()
+    viewmodel.ledger = ledger
+
+    prompt_calls: list[Decimal] = []
+
+    def prompt_for_saldo(net_change: Decimal) -> Decimal:
+        prompt_calls.append(net_change)
+        return Decimal("500.00")
+
+    confirm_called = False
+
+    def confirm_replacement(*_args, **_kwargs) -> bool:  # pragma: no cover - should not be called
+        nonlocal confirm_called
+        confirm_called = True
+        return False
+
+    imported = viewmodel.import_credit_card_statement(
+        csv_path,
+        prompt_for_saldo=prompt_for_saldo,
+        confirm_replacement=confirm_replacement,
+    )
+
+    assert imported == 4
+    assert prompt_calls == [Decimal("70.00")]
+    assert confirm_called is False
+
+    by_reference = {txn.reference: txn for txn in viewmodel.ledger.transactions}
+    assert by_reference["CC1"].amount == Decimal("-300.00")
+    assert by_reference["CC4"].amount == Decimal("-20.00")
+    assert by_reference["CC2"].amount == Decimal("50.00")
+    assert by_reference["CC3"].amount == Decimal("200.00")
