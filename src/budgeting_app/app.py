@@ -218,6 +218,7 @@ class BudgetApp(tk.Tk):
             },
         )
         self.transaction_table.grid(row=2, column=0, sticky="nsew")
+        self.transaction_table.bind_yview(self._on_transaction_viewport_changed)
         self.transaction_table.tree.bind("<ButtonRelease-1>", self._handle_transaction_click)
         self.transaction_table.tree.bind(
             "<<TreeviewSelect>>", self._update_transaction_actions_state
@@ -839,6 +840,17 @@ class BudgetApp(tk.Tk):
         self._ai_refresh_pending = True
         if not self._ai_worker_thread or not self._ai_worker_thread.is_alive():
             self._launch_ai_worker()
+
+    def _on_transaction_viewport_changed(self) -> None:
+        """Reprioritise AI categorisation when the visible rows change."""
+
+        if not self.ai_active or self._suspend_ai_refresh:
+            return
+        worker = self._ai_worker_thread
+        was_running = worker is not None and worker.is_alive()
+        self._request_ai_refresh()
+        if was_running and self._ai_stop_event and not self._ai_stop_event.is_set():
+            self._ai_stop_event.set()
 
     def _transaction_processing_order(self) -> list[str]:
         """Return transaction IDs in the order AI categorisation should follow."""

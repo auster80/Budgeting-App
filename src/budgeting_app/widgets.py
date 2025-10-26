@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from tkinter import ttk
 
@@ -74,6 +74,7 @@ class Table(ttk.Frame):
             show="headings",
             selectmode=selectmode,
         )
+        self._yview_callbacks: list[Callable[[], None]] = []
         self._columns = columns
         self._base_headings = {
             column: headings.get(column, column.replace("_", " ").title())
@@ -89,10 +90,10 @@ class Table(ttk.Frame):
             stretch = options.pop("stretch", True)
             self.tree.column(column, anchor=anchor, stretch=stretch, **options)
         self._update_heading_indicators()
-        vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
+        self._vsb = ttk.Scrollbar(self, orient="vertical", command=self._on_vertical_scroll)
+        self.tree.configure(yscrollcommand=self._on_tree_yview)
         self.tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
+        self._vsb.grid(row=0, column=1, sticky="ns")
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
@@ -107,6 +108,23 @@ class Table(ttk.Frame):
 
     def bind_double_click(self, callback) -> None:
         self.tree.bind("<Double-1>", callback)
+
+    def bind_yview(self, callback: Callable[[], None]) -> None:
+        """Invoke ``callback`` whenever the vertical viewport changes."""
+
+        self._yview_callbacks.append(callback)
+
+    def _notify_yview_changed(self) -> None:
+        for callback in list(self._yview_callbacks):
+            callback()
+
+    def _on_vertical_scroll(self, *args) -> None:
+        self.tree.yview(*args)
+        self._notify_yview_changed()
+
+    def _on_tree_yview(self, *args) -> None:
+        self._vsb.set(*args)
+        self._notify_yview_changed()
 
     def _toggle_sort(self, column: str) -> None:
         if self._sort_column == column:
