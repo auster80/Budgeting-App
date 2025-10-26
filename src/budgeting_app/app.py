@@ -985,18 +985,49 @@ class BudgetApp(tk.Tk):
                 self.after(0, self._refresh_ai_log)
 
             if should_abort():
-                self.after(0, lambda: self._on_ai_worker_finished(collected, stop_event))
+                self.after(
+                    0,
+                    lambda results=dict(collected): self._on_ai_worker_finished(
+                        results,
+                        stop_event,
+                        aborted=True,
+                    ),
+                )
                 return
 
             final_results = suggestions or collected
-            self.after(0, lambda: self._on_ai_worker_finished(final_results, stop_event))
+            self.after(
+                0,
+                lambda results=dict(final_results): self._on_ai_worker_finished(
+                    results,
+                    stop_event,
+                    aborted=False,
+                ),
+            )
 
         thread = threading.Thread(target=worker, daemon=True)
         self._ai_worker_thread = thread
         thread.start()
 
+    @staticmethod
+    def _merge_ai_suggestions(
+        existing: dict[str, ClassificationResult],
+        updates: dict[str, ClassificationResult],
+        *,
+        replace: bool,
+    ) -> dict[str, ClassificationResult]:
+        if replace:
+            return dict(updates)
+        merged = dict(existing)
+        merged.update(updates)
+        return merged
+
     def _on_ai_worker_finished(
-        self, suggestions: dict[str, ClassificationResult], stop_event: threading.Event
+        self,
+        suggestions: dict[str, ClassificationResult],
+        stop_event: threading.Event,
+        *,
+        aborted: bool,
     ) -> None:
         if self._ai_stop_event is stop_event and self.ai_active:
             filtered = {
@@ -1004,7 +1035,11 @@ class BudgetApp(tk.Tk):
                 for txn_id, result in suggestions.items()
                 if self._transaction_is_unassigned(txn_id)
             }
-            self.ai_suggestions = filtered
+            self.ai_suggestions = self._merge_ai_suggestions(
+                self.ai_suggestions,
+                filtered,
+                replace=not aborted,
+            )
             self._suspend_ai_refresh = True
             self._on_data_changed(self.viewmodel.ledger)
 
