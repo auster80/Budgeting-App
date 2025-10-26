@@ -74,6 +74,8 @@ class Transaction:
     counterparty: str | None = None
     reference: str | None = None
     company: str | None = None
+    is_internal_transfer: bool = False
+    transfer_partner_id: str | None = None
 
     def __post_init__(self) -> None:
         self.amount = _to_decimal(self.amount)
@@ -101,12 +103,16 @@ class Transaction:
             counterparty=payload.get("counterparty"),
             reference=payload.get("reference"),
             company=payload.get("company"),
+            is_internal_transfer=payload.get("is_internal_transfer", False),
+            transfer_partner_id=payload.get("transfer_partner_id"),
         )
 
 
 @dataclass(slots=True)
 class BudgetLedger:
     """Container for the user's budget categories and transactions."""
+
+    TRANSFER_CATEGORY_NAME = "Transfers"
 
     categories: Dict[str, BudgetCategory] = field(default_factory=dict)
     transactions: List[Transaction] = field(default_factory=list)
@@ -188,7 +194,102 @@ class BudgetLedger:
             if category_id not in self.categories:
                 raise KeyError(f"Unknown category id '{category_id}'")
             self.categories[category_id].apply_transaction(transaction)
+        if self.detect_internal_transfers():
+            self.recalculate_actuals()
         return transaction
+
+    # ------------------------------------------------------------------ #
+    # Internal transfer helpers
+    # ------------------------------------------------------------------ #
+
+    def _get_transfer_category_id(self) -> Optional[str]:
+        for category_id, category in self.categories.items():
+            if category.name.lower() == self.TRANSFER_CATEGORY_NAME.lower():
+                return category_id
+        return None
+
+    def _ensure_transfer_category(self) -> str:
+        transfer_id = self._get_transfer_category_id()
+        if transfer_id is not None:
+            return transfer_id
+        category = self.add_category(self.TRANSFER_CATEGORY_NAME, Decimal("0.00"))
+        return category.category_id
+
+    def _mark_transfer_pair(
+        self, first: Transaction, second: Transaction, *, category_id: str
+    ) -> bool:
+        changed = False
+        for current, partner in ((first, second), (second, first)):
+            if not current.is_internal_transfer:
+                current.is_internal_transfer = True
+                changed = True
+            if current.transfer_partner_id != partner.transaction_id:
+                current.transfer_partner_id = partner.transaction_id
+                changed = True
+            if current.category_id != category_id:
+                current.category_id = category_id
+                changed = True
+        return changed
+
+    def detect_internal_transfers(self) -> bool:
+        """Re-evaluate the ledger for internal transfers.
+
+        Returns ``True`` when any transaction or category assignment changed.
+        """
+
+        changed = False
+        transfer_category_id = self._get_transfer_category_id()
+
+        # Reset existing transfer markers; category will be re-applied if a
+        # valid pair is detected again.
+        for txn in self.transactions:
+            if txn.is_internal_transfer:
+                txn.is_internal_transfer = False
+                changed = True
+            if txn.transfer_partner_id is not None:
+                txn.transfer_partner_id = None
+                changed = True
+            if transfer_category_id and txn.category_id == transfer_category_id:
+                txn.category_id = None
+                changed = True
+
+        if not self.transactions:
+            return changed
+
+        from collections import defaultdict
+
+        groups: Dict[tuple[str, Decimal], List[Transaction]] = defaultdict(list)
+        for txn in self.transactions:
+            if not txn.reference or not txn.account_id or txn.amount == 0:
+                continue
+            key = (txn.reference.strip().lower(), abs(txn.amount))
+            groups[key].append(txn)
+
+        for transactions in groups.values():
+            positives = [t for t in transactions if t.amount > 0]
+            negatives = [t for t in transactions if t.amount < 0]
+            if not positives or not negatives:
+                continue
+            used_negatives: set[str] = set()
+            used_positives: set[str] = set()
+            transfer_id: Optional[str] = None
+            for pos in positives:
+                if pos.account_id is None or pos.transaction_id in used_positives:
+                    continue
+                for neg in negatives:
+                    if neg.account_id == pos.account_id:
+                        continue
+                    if neg.transaction_id in used_negatives:
+                        continue
+                    if transfer_id is None:
+                        transfer_id = self._ensure_transfer_category()
+                    if self._mark_transfer_pair(pos, neg, category_id=transfer_id):
+                        changed = True
+                    used_negatives.add(neg.transaction_id)
+                    used_positives.add(pos.transaction_id)
+                    break
+
+        return changed
 
     def recalculate_actuals(self) -> None:
         """Recompute category actual totals from the transactions list."""
@@ -216,5 +317,6 @@ class BudgetLedger:
         for txn_data in payload.get("transactions", []):
             transaction = Transaction.from_dict(txn_data)
             ledger.transactions.append(transaction)
+        ledger.detect_internal_transfers()
         ledger.recalculate_actuals()
         return ledger

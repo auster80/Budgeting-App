@@ -118,6 +118,7 @@ class BudgetViewModel:
         self.ledger.transactions = [
             txn for txn in self.ledger.transactions if txn.transaction_id != transaction_id
         ]
+        self.ledger.detect_internal_transfers()
         self.ledger.recalculate_actuals()
         self._notify()
 
