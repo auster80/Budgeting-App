@@ -63,7 +63,7 @@ def _parse_credit_card_date(value: str) -> str:
     cleaned = value.strip()
     if not cleaned:
         raise ValueError("Credit card transaction is missing a date")
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%m-%d-%Y"):
         try:
             return datetime.strptime(cleaned, fmt).date().isoformat()
         except ValueError:

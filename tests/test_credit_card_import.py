@@ -23,6 +23,22 @@ def _write_sample_credit_card_csv(path: Path) -> Path:
     return target
 
 
+def test_read_credit_card_statement_accepts_us_formatted_dates(tmp_path: Path) -> None:
+    csv_path = tmp_path / "credit_card_us.csv"
+    csv_path.write_text(
+        """Datum,Omschrijving,Bedrag
+09/22/2025,Amazon,"4,91"
+""",
+        encoding="utf-8",
+    )
+
+    transactions = read_credit_card_statement(csv_path)
+
+    assert len(transactions) == 1
+    assert transactions[0].occurred_on == "2025-09-22"
+    assert transactions[0].amount == Decimal("4.91")
+
+
 def test_read_credit_card_statement_parses_rows(tmp_path: Path) -> None:
     csv_path = _write_sample_credit_card_csv(tmp_path)
     transactions = read_credit_card_statement(csv_path)
