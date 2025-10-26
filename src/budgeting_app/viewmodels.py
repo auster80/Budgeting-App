@@ -464,14 +464,20 @@ class BudgetViewModel:
 
         existing_transactions = list(self.ledger.transactions)
         for record in statement_rows:
-            ledger_amount = (-record.amount).quantize(quantize_amount)
+            statement_amount = record.amount.quantize(quantize_amount)
+            if statement_amount == 0:
+                continue
+            ledger_amount = (-statement_amount).quantize(quantize_amount)
             record_date = date.fromisoformat(record.occurred_on)
             for txn in existing_transactions:
                 if txn.transaction_id in matched_transaction_ids:
                     continue
                 if record.reference and txn.reference == record.reference:
                     continue
-                if txn.amount.quantize(quantize_amount) != ledger_amount:
+                txn_amount = txn.amount.quantize(quantize_amount)
+                if txn_amount == 0:
+                    continue
+                if txn_amount != ledger_amount:
                     continue
                 txn_date = date.fromisoformat(txn.occurred_on)
                 if abs((txn_date - record_date).days) <= match_window.days:

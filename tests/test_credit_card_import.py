@@ -182,3 +182,38 @@ def test_import_credit_card_statement_skips_existing_references(tmp_path: Path) 
 
     assert imported_second == 0
     assert confirm_called is False
+
+
+def test_import_credit_card_statement_only_matches_opposite_signs(tmp_path: Path) -> None:
+    csv_path = _write_sample_credit_card_csv(tmp_path)
+
+    ledger = BudgetLedger()
+    existing = ledger.record_transaction(
+        description="Existing same-sign transaction",
+        amount=Decimal("300.00"),
+        category_id=None,
+        occurred_on="2024-03-02",
+        transaction_id="BANK-SAME",
+    )
+
+    viewmodel = BudgetViewModel()
+    viewmodel.ledger = ledger
+
+    confirm_called = False
+
+    def confirm_replacement(*_args, **_kwargs) -> bool:  # pragma: no cover - should not be called
+        nonlocal confirm_called
+        confirm_called = True
+        return True
+
+    imported = viewmodel.import_credit_card_statement(
+        csv_path,
+        confirm_replacement=confirm_replacement,
+    )
+
+    assert imported == 4
+    assert confirm_called is False
+    assert any(
+        txn.transaction_id == existing.transaction_id
+        for txn in viewmodel.ledger.transactions
+    )
