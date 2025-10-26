@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime
+from decimal import Decimal
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 from .models import Transaction
+from .feedback_store import FeedbackStore, StoredLabel
 
 try:  # pragma: no cover - optional dependency error classes vary by version
     from openai import OpenAI
@@ -52,6 +55,28 @@ class ClassificationResult:
     confidence: float
 
 
+_CLASSIFICATION_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "transaction_classification",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string"},
+                "confidence": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                },
+            },
+            "required": ["category"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+}
+
+
 class TransactionClassifier:
     """Generate transaction category suggestions using ChatGPT."""
 
@@ -66,6 +91,8 @@ class TransactionClassifier:
         self.temperature = temperature
         self.max_feedback_examples = max_feedback_examples
         self._memory: dict[str, ClassificationResult] = {}
+        self._feedback_store = FeedbackStore()
+        self._embedding_model = "text-embedding-3-small"
         api_key = os.getenv("OPENAI_API_KEY")
         self._legacy_client: Optional[_LegacyChatCompletionClient] = None
         self._using_legacy_sdk = False
@@ -94,6 +121,7 @@ class TransactionClassifier:
                 self._using_legacy_sdk = True
         self._warned_missing_client = False
         self._warned_legacy_mode = False
+        self._seed_memory_from_feedback()
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -110,6 +138,9 @@ class TransactionClassifier:
 
         categories = list(existing_categories)
         examples = list(categorized_examples)
+        feedback_examples = self._feedback_examples_for_prompt(transaction)
+        if feedback_examples:
+            examples.extend(feedback_examples)
         if logger:
             txn_label = transaction.description or transaction.transaction_id or "(unnamed)"
             logger(f"Classifying transaction '{txn_label}'.")
@@ -188,10 +219,8 @@ class TransactionClassifier:
                     ],
                 )
             else:
-                response = self._client.chat.completions.create(  # type: ignore[call-arg]
-                    model=self.model,
-                    temperature=self.temperature,
-                    messages=[
+                response = self._invoke_chat_completion(
+                    [
                         {
                             "role": "system",
                             "content": (
@@ -201,7 +230,7 @@ class TransactionClassifier:
                             ),
                         },
                         {"role": "user", "content": prompt},
-                    ],
+                    ]
                 )
         except (_APIError, _OpenAIError) as exc:  # pragma: no cover - network failure path
             if logger:
@@ -247,6 +276,52 @@ class TransactionClassifier:
             )
         return result
 
+    def record_feedback(
+        self,
+        txn: Transaction,
+        suggested: Optional[ClassificationResult],
+        final_category: str,
+    ) -> None:
+        """Persist user feedback and update in-memory hints."""
+
+        final_category = final_category.strip()
+        if not final_category:
+            return
+        normalised_key = self._normalise_transaction(txn)
+        if normalised_key:
+            self._memory[normalised_key] = ClassificationResult(final_category, 0.99)
+
+        accepted = False
+        overwritten = False
+        suggested_name: Optional[str] = None
+        if suggested:
+            suggested_name = suggested.category_name
+            if suggested_name.lower() == final_category.lower():
+                accepted = True
+            else:
+                overwritten = True
+
+        features = self._serialise_features(txn)
+        embedding: Optional[list[float]] = None
+        try:
+            embedding = self._create_embedding(txn)
+        except Exception:
+            embedding = None
+
+        try:
+            self._feedback_store.add_label(
+                normalized_key=normalised_key,
+                features=features,
+                suggested_category=suggested_name,
+                final_category=final_category,
+                accepted=accepted,
+                overwritten=overwritten,
+                embedding=embedding,
+            )
+        except Exception:
+            # Persistence failures should not disrupt the UI flow.
+            pass
+
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
@@ -262,6 +337,42 @@ class TransactionClassifier:
             return getattr(message, "content", "") or ""
         except AttributeError:  # pragma: no cover - defensive programming
             return ""
+
+    def _seed_memory_from_feedback(self) -> None:
+        """Prime the memoised classifications with the recent feedback store."""
+
+        try:
+            recent = list(self._feedback_store.iter_recent(limit=self.max_feedback_examples))
+        except Exception:
+            return
+        for label in recent:
+            key = self._normalise_transaction(label.transaction)
+            if key and label.final_category:
+                self._memory[key] = ClassificationResult(label.final_category, 0.99)
+
+    def _invoke_chat_completion(self, messages: Sequence[dict[str, str]]) -> object:
+        """Call the Chat Completions API with structured outputs when available."""
+
+        if not self._client:
+            raise RuntimeError("Chat client is not configured")
+        payload = {
+            "model": self.model,
+            "temperature": self.temperature,
+            "messages": list(messages),
+        }
+        if self._using_legacy_sdk:
+            raise RuntimeError("Structured outputs are not supported in legacy mode")
+        try:
+            return self._client.chat.completions.create(  # type: ignore[call-arg]
+                **payload,
+                response_format=_CLASSIFICATION_JSON_SCHEMA,
+            )
+        except TypeError:
+            return self._client.chat.completions.create(**payload)  # type: ignore[call-arg]
+        except _OpenAIError as exc:
+            if "response_format" in str(exc).lower():
+                return self._client.chat.completions.create(**payload)  # type: ignore[call-arg]
+            raise
 
     def _update_memory(self, examples: Sequence[Tuple[Transaction, str]]) -> None:
         """Seed the classifier memory with known user-labelled transactions."""
@@ -378,6 +489,114 @@ class TransactionClassifier:
         for keyword, category_name in resolved_keywords.items():
             if keyword in text:
                 return ClassificationResult(category_name, 0.6)
+        return None
+
+    def _feedback_examples_for_prompt(
+        self, transaction: Transaction
+    ) -> List[Tuple[Transaction, str]]:
+        """Retrieve similar, user-labelled examples for few-shot prompting."""
+
+        limit = min(self.max_feedback_examples, 10)
+        labels: list[StoredLabel] = []
+        try:
+            embedding = self._create_embedding(transaction)
+        except Exception:
+            embedding = None
+
+        if embedding:
+            try:
+                labels = self._feedback_store.lookup_similar(embedding, limit=limit)
+            except Exception:
+                labels = []
+        else:
+            try:
+                labels = list(self._feedback_store.iter_recent(limit=limit))
+            except Exception:
+                labels = []
+
+        examples: List[Tuple[Transaction, str]] = []
+        for label in labels:
+            if label.final_category:
+                examples.append((label.transaction, label.final_category))
+        return examples
+
+    @staticmethod
+    def _serialise_features(txn: Transaction) -> dict:
+        return {
+            "description": txn.description,
+            "counterparty": txn.counterparty,
+            "amount": str(txn.amount),
+            "reference": txn.reference,
+            "account_name": txn.account_name,
+            "account_id": txn.account_id,
+            "occurred_on": txn.occurred_on,
+        }
+
+    def _create_embedding(self, txn: Transaction) -> Optional[list[float]]:
+        text = self._embedding_text(txn)
+        if not text.strip():
+            return None
+        return self._request_embedding(text)
+
+    def _embedding_text(self, txn: Transaction) -> str:
+        desc = (txn.description or "").strip().lower()
+        counterparty = (txn.counterparty or "").strip().lower()
+        reference = (txn.reference or "").strip().lower()
+        account = (txn.account_name or txn.account_id or "").strip().lower()
+        bucket = self._amount_bucket(txn.amount)
+        weekday = self._weekday_token(txn.occurred_on)
+        return (
+            f"desc:{desc} counterparty:{counterparty} ref:{reference} "
+            f"account:{account} amount_bucket:{bucket} dow:{weekday}"
+        ).strip()
+
+    @staticmethod
+    def _amount_bucket(amount: Decimal) -> str:
+        value = abs(amount)
+        buckets = [
+            (Decimal("0"), Decimal("5")),
+            (Decimal("5"), Decimal("20")),
+            (Decimal("20"), Decimal("50")),
+            (Decimal("50"), Decimal("100")),
+            (Decimal("100"), Decimal("250")),
+            (Decimal("250"), Decimal("500")),
+            (Decimal("500"), Decimal("1000")),
+        ]
+        for lower, upper in buckets:
+            if value <= upper:
+                return f"{int(lower)}-{int(upper)}"
+        return "over-1000"
+
+    @staticmethod
+    def _weekday_token(value: str) -> str:
+        if not value:
+            return "unknown"
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return "unknown"
+        return parsed.strftime("%a").lower()
+
+    def _request_embedding(self, text: str) -> Optional[list[float]]:
+        if not text:
+            return None
+        try:
+            if self._client and not self._using_legacy_sdk:
+                response = self._client.embeddings.create(  # type: ignore[attr-defined]
+                    model=self._embedding_model,
+                    input=[text],
+                )
+                embedding = response.data[0].embedding  # type: ignore[index]
+                return list(embedding)
+            if _LEGACY_OPENAI is not None:
+                legacy_response = _LEGACY_OPENAI.Embedding.create(  # type: ignore[attr-defined]
+                    model=self._embedding_model,
+                    input=[text],
+                )
+                data = legacy_response["data"][0]["embedding"]  # type: ignore[index]
+                return [float(value) for value in data]
+        except Exception:
+            return None
         return None
 
     def _resolve_category_name(

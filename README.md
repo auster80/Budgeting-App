@@ -15,6 +15,7 @@ This project provides a lightweight Windows-friendly budgeting application built
 
 - Python 3.10 or later (developed against Python 3.13.6).
 - [OpenAI Python SDK](https://github.com/openai/openai-python) for AI-assisted categorisation.
+  - The SDK is used for both chat completions and the `text-embedding-3-small` embedding model.
 
 ## Quick Start
 
@@ -54,6 +55,19 @@ The AI classification features call OpenAI's ChatGPT models. To activate them:
 3. (Optional) Persist the variable in your shell profile (e.g. `$PROFILE`, `~/.bashrc`, or `~/.zshrc`) so future sessions pick it up.
 
 If the key is not configured, the app falls back to a local heuristic classifier and the AI log explains how classifications were produced.
+
+### Feedback capture and instant learning
+
+The classifier now stores every user decision in a lightweight SQLite database (`budget_feedback.sqlite3`).
+
+- Each time you accept or overwrite a suggestion the app records the transaction details, the suggested
+  category, the final category, and whether the suggestion was accepted.
+- The app also writes an embedding for the transaction using `text-embedding-3-small` so that similar
+  transactions can be recalled immediately the next time you classify a statement.
+- These embeddings are used as few-shot examples in future prompts. Overridden suggestions (“hard
+  negatives”) are prioritised so the model quickly learns recurring corrections.
+
+The database lives alongside your budget JSON file by default. Delete `budget_feedback.sqlite3` if you need to reset the stored history. Ensure the working directory is writable so the app can persist feedback and vectors.
 
 ## Next Steps
 

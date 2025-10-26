@@ -24,6 +24,7 @@ class BudgetViewModel:
         self._listeners: List[ChangeListener] = []
         self._classifier = TransactionClassifier()
         self._ai_log: List[str] = []
+        self._latest_suggestions: dict[str, ClassificationResult] = {}
 
     # ------------------------------------------------------------------ #
     # Persistence
@@ -132,8 +133,14 @@ class BudgetViewModel:
 
         id_set = set(transaction_ids)
         updated = False
+        final_category_name = self.ledger.categories[category_id].name
         for txn in self.ledger.transactions:
             if txn.transaction_id in id_set:
+                suggestion = self._latest_suggestions.pop(txn.transaction_id, None)
+                try:
+                    self._classifier.record_feedback(txn, suggestion, final_category_name)
+                except Exception:
+                    pass
                 txn.category_id = category_id
                 updated = True
 
@@ -209,6 +216,7 @@ class BudgetViewModel:
             f"transaction{'s' if len(unassigned) != 1 else ''}."
         )
 
+        self._latest_suggestions = {}
         suggestions: dict[str, ClassificationResult] = {}
         for txn in unassigned:
             if should_abort and should_abort():
@@ -233,6 +241,7 @@ class BudgetViewModel:
                 log(f"No suggestion produced for '{txn_label}'.")
                 continue
             suggestions[txn.transaction_id] = result
+            self._latest_suggestions[txn.transaction_id] = result
             if on_suggestion:
                 on_suggestion(txn.transaction_id, result)
             log(

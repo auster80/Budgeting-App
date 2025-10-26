@@ -9,4 +9,5 @@ __all__ = [
     "csv_importer",
     "text_utils",
     "ai",
+    "feedback_store",
 ]
