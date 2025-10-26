@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
 from .ai import ClassificationResult, TransactionClassifier
-from .csv_importer import CSVTransaction, read_transactions_from_csv
+from .csv_importer import (
+    CSVTransaction,
+    read_credit_card_statement,
+    read_transactions_from_csv,
+)
 from .models import BudgetLedger, BudgetCategory, Transaction
 from .storage import load_ledger, save_ledger
 
@@ -428,6 +432,94 @@ class BudgetViewModel:
                 company=record.company,
             )
             imported += 1
+
+        if imported:
+            self._notify()
+        return imported
+
+    def _get_transfer_category_id(self) -> str:
+        for category_id, category in self.ledger.categories.items():
+            if category.name.lower() == self.ledger.TRANSFER_CATEGORY_NAME.lower():
+                return category_id
+        category = self.ledger.add_category(self.ledger.TRANSFER_CATEGORY_NAME, Decimal("0.00"))
+        return category.category_id
+
+    def import_credit_card_statement(
+        self,
+        path: str | Path,
+        *,
+        prompt_for_saldo: Callable[[Decimal], Optional[Decimal]],
+        confirm_replacement: Callable[[Transaction, Decimal], bool],
+    ) -> int:
+        """Import a credit-card statement and replace the matching counterbooking."""
+
+        statement_rows = read_credit_card_statement(path)
+        if not statement_rows:
+            return 0
+
+        net_change = sum((row.amount for row in statement_rows), Decimal("0.00"))
+        net_change = net_change.quantize(Decimal("0.01"))
+
+        saldo = prompt_for_saldo(net_change)
+        if saldo is None:
+            return 0
+        saldo = saldo.quantize(Decimal("0.01"))
+        open_balance = (saldo - net_change).quantize(Decimal("0.01"))
+
+        counter_txn: Optional[Transaction] = None
+        if open_balance != Decimal("0.00"):
+            for txn in self.ledger.transactions:
+                if txn.amount.quantize(Decimal("0.01")) == -open_balance:
+                    counter_txn = txn
+                    break
+                if txn.amount.copy_abs().quantize(Decimal("0.01")) == open_balance:
+                    counter_txn = txn
+                    break
+            if counter_txn is None:
+                raise ValueError(
+                    f"No existing transaction matches the opening saldo of {open_balance:.2f} to replace."
+                )
+            if not confirm_replacement(counter_txn, open_balance):
+                return 0
+            self.ledger.transactions = [
+                txn for txn in self.ledger.transactions if txn.transaction_id != counter_txn.transaction_id
+            ]
+            self.ledger.detect_internal_transfers()
+            self.ledger.recalculate_actuals()
+
+        imported = 0
+        transfer_category_id: Optional[str] = None
+        positive_transactions: List[Transaction] = []
+
+        default_account_id = statement_rows[0].account_id or "CREDIT-CARD"
+        default_account_name = statement_rows[0].account_name or "Credit Card"
+
+        for record in statement_rows:
+            ledger_amount = (-record.amount).quantize(Decimal("0.01"))
+            txn = self.ledger.record_transaction(
+                description=record.description,
+                amount=ledger_amount,
+                category_id=None,
+                occurred_on=record.occurred_on,
+                transaction_id=record.reference,
+                account_id=record.account_id or default_account_id,
+                account_name=record.account_name or default_account_name,
+                counterparty=record.counterparty,
+                reference=record.reference,
+                company=record.company,
+            )
+            if ledger_amount > 0:
+                if transfer_category_id is None:
+                    transfer_category_id = self._get_transfer_category_id()
+                positive_transactions.append(txn)
+            imported += 1
+
+        if transfer_category_id and positive_transactions:
+            for txn in positive_transactions:
+                txn.category_id = transfer_category_id
+            self.ledger.recalculate_actuals()
+        elif imported:
+            self.ledger.recalculate_actuals()
 
         if imported:
             self._notify()
