@@ -10,7 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .ai import ClassificationResult
-from .viewmodels import BudgetViewModel
+from .viewmodels import BudgetViewModel, CSVImportPreview
 from .widgets import CurrencyEntry, LabeledEntry, Table
 
 
@@ -453,6 +453,29 @@ class BudgetApp(tk.Tk):
             self._set_status(f"Assigned suggested category '{category_name}'.")
         self.ai_suggestions.pop(transaction_id, None)
 
+    def _build_import_preview_message(self, preview: CSVImportPreview) -> str:
+        """Create a user-friendly summary for the CSV import preview dialog."""
+
+        lines = [
+            f"New transactions to import: {preview.new_count}",
+            f"Duplicate transactions to skip: {preview.duplicate_count}",
+        ]
+
+        if preview.new_transactions:
+            lines.append("")
+            lines.append("Preview of new transactions:")
+            lines.append("(showing up to 5)")
+            for record in preview.new_transactions[:5]:
+                amount = f"{record.amount:.2f}"
+                lines.append(
+                    f"- {record.occurred_on} | {amount} | {record.description}"
+                )
+            remaining = preview.new_count - min(preview.new_count, 5)
+            if remaining > 0:
+                lines.append(f"...and {remaining} more transactions.")
+
+        return "\n".join(lines)
+
     def _handle_import_csv(self) -> None:
         file_path = filedialog.askopenfilename(
             title="Select CSV File",
@@ -462,21 +485,54 @@ class BudgetApp(tk.Tk):
             self._set_status("Import cancelled.")
             return
         try:
-            imported = self.viewmodel.import_transactions_from_csv(file_path)
+            preview = self.viewmodel.create_csv_import_preview(file_path)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Import Failed", str(exc))
             self._set_status("Import failed.")
             return
-        if imported == 0:
-            messagebox.showinfo("Import Complete", "No new transactions were imported.")
+
+        if preview.new_count == 0:
+            if preview.duplicate_count:
+                message = (
+                    "No new transactions detected. "
+                    f"Found {preview.duplicate_count} duplicates that will be skipped."
+                )
+            else:
+                message = "The selected file does not contain any transactions to import."
+            messagebox.showinfo("Import CSV", message)
             self._set_status("No new transactions were imported.")
-        else:
-            messagebox.showinfo(
-                "Import Complete",
-                f"Imported {imported} transactions from the CSV file.",
-            )
-            short_name = Path(file_path).name
-            self._set_status(f"Imported {imported} transactions from {short_name}.")
+            return
+
+        summary = self._build_import_preview_message(preview)
+        proceed = messagebox.askyesno(
+            "Confirm Import",
+            summary,
+            icon="question",
+            default="yes",
+        )
+        if not proceed:
+            self._set_status("Import cancelled.")
+            return
+
+        try:
+            imported = self.viewmodel.import_transactions_from_csv(preview)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Import Failed", str(exc))
+            self._set_status("Import failed.")
+            return
+
+        messagebox.showinfo(
+            "Import Complete",
+            (
+                f"Imported {imported} new transactions.\n"
+                f"Skipped {preview.duplicate_count} duplicates."
+            ),
+        )
+        short_name = Path(file_path).name
+        self._set_status(
+            f"Imported {imported} transactions from {short_name}; "
+            f"skipped {preview.duplicate_count} duplicates."
+        )
 
     def _save_budget(self) -> None:
         self.viewmodel.save()

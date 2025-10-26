@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
@@ -13,6 +13,23 @@ from .models import BudgetLedger, BudgetCategory, Transaction
 from .storage import load_ledger, save_ledger
 
 ChangeListener = Callable[[BudgetLedger], None]
+
+
+@dataclass(slots=True)
+class CSVImportPreview:
+    """Summary of the differences between a CSV file and existing data."""
+
+    source_path: Path
+    new_transactions: List[CSVTransaction]
+    duplicate_transactions: List[CSVTransaction]
+
+    @property
+    def new_count(self) -> int:
+        return len(self.new_transactions)
+
+    @property
+    def duplicate_count(self) -> int:
+        return len(self.duplicate_transactions)
 
 
 class BudgetViewModel:
@@ -302,9 +319,80 @@ class BudgetViewModel:
     # ------------------------------------------------------------------ #
     # Import helpers
     # ------------------------------------------------------------------ #
-    def import_transactions_from_csv(
+    def _import_key(
+        self,
+        *,
+        reference: Optional[str],
+        account_id: Optional[str],
+        occurred_on: str,
+        amount: Decimal,
+        description: str,
+    ) -> tuple[str, str, str, str, str]:
+        if reference:
+            return ("reference", reference.strip())
+        account = (account_id or "").strip()
+        return (
+            "details",
+            account,
+            occurred_on,
+            str(amount),
+            description.strip().lower(),
+        )
+
+    def _existing_transaction_keys(self) -> set[tuple[str, str, str, str, str]]:
+        keys: set[tuple[str, str, str, str, str]] = set()
+        for txn in self.ledger.transactions:
+            keys.add(
+                self._import_key(
+                    reference=txn.reference,
+                    account_id=txn.account_id,
+                    occurred_on=txn.occurred_on,
+                    amount=txn.amount,
+                    description=txn.description,
+                )
+            )
+        return keys
+
+    def _csv_transaction_key(self, record: CSVTransaction) -> tuple[str, str, str, str, str]:
+        return self._import_key(
+            reference=record.reference,
+            account_id=record.account_id,
+            occurred_on=record.occurred_on,
+            amount=record.amount,
+            description=record.description,
+        )
+
+    def create_csv_import_preview(
         self,
         path: str | Path,
+        *,
+        skip_existing: bool = True,
+    ) -> CSVImportPreview:
+        """Analyse a CSV file and determine which transactions would be imported."""
+
+        csv_transactions = list(read_transactions_from_csv(path))
+        if not csv_transactions:
+            return CSVImportPreview(Path(path), [], [])
+
+        existing_keys = self._existing_transaction_keys() if skip_existing else set()
+        new_transactions: List[CSVTransaction] = []
+        duplicates: List[CSVTransaction] = []
+
+        for record in csv_transactions:
+            key = self._csv_transaction_key(record)
+            if skip_existing and key in existing_keys:
+                duplicates.append(record)
+                continue
+
+            if skip_existing:
+                existing_keys.add(key)
+            new_transactions.append(record)
+
+        return CSVImportPreview(Path(path), new_transactions, duplicates)
+
+    def import_transactions_from_csv(
+        self,
+        source: str | Path | CSVImportPreview,
         *,
         category_by_account: Optional[dict[str, str]] = None,
         default_category_id: Optional[str] = None,
@@ -312,20 +400,19 @@ class BudgetViewModel:
     ) -> int:
         """Import transactions from a Rabobank CSV export."""
         category_by_account = category_by_account or {}
-        csv_transactions = list(read_transactions_from_csv(path))
-        if not csv_transactions:
+        if isinstance(source, CSVImportPreview):
+            preview = source
+        else:
+            preview = self.create_csv_import_preview(
+                source,
+                skip_existing=skip_existing,
+            )
+
+        if not preview.new_transactions:
             return 0
 
-        existing_refs = {
-            txn.reference
-            for txn in self.ledger.transactions
-            if txn.reference is not None
-        } if skip_existing else set()
-
         imported = 0
-        for record in csv_transactions:
-            if skip_existing and record.reference and record.reference in existing_refs:
-                continue
+        for record in preview.new_transactions:
             category_id = category_by_account.get(record.account_id, default_category_id)
             self.ledger.record_transaction(
                 description=record.description,
@@ -339,8 +426,6 @@ class BudgetViewModel:
                 reference=record.reference,
                 company=record.company,
             )
-            if record.reference:
-                existing_refs.add(record.reference)
             imported += 1
 
         if imported:
