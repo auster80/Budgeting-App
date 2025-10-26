@@ -840,6 +840,55 @@ class BudgetApp(tk.Tk):
         if not self._ai_worker_thread or not self._ai_worker_thread.is_alive():
             self._launch_ai_worker()
 
+    def _transaction_processing_order(self) -> list[str]:
+        """Return transaction IDs in the order AI categorisation should follow."""
+
+        if not hasattr(self, "transaction_table"):
+            return []
+
+        tree = self.transaction_table.tree
+        children = list(tree.get_children(""))
+        if not children:
+            return []
+
+        try:
+            tree.update_idletasks()
+        except Exception:
+            pass
+
+        viewport_height = max(tree.winfo_height(), 1)
+        visible: list[str] = []
+        after_visible: list[str] = []
+        before_visible: list[str] = []
+        encountered_visible = False
+
+        for item_id in children:
+            bbox = tree.bbox(item_id)
+            is_visible = False
+            if bbox:
+                _x, y, _width, height = bbox
+                if viewport_height <= 1:
+                    is_visible = True
+                else:
+                    is_visible = (y + height) >= 0 and y <= viewport_height
+            if is_visible:
+                encountered_visible = True
+                visible.append(item_id)
+            elif not encountered_visible:
+                before_visible.append(item_id)
+            else:
+                after_visible.append(item_id)
+
+        ordered = visible + after_visible + before_visible
+        if not ordered:
+            ordered = children
+
+        return [
+            transaction_id
+            for transaction_id in ordered
+            if transaction_id and self._transaction_is_unassigned(transaction_id)
+        ]
+
     def _update_transaction_actions_state(self, _event=None) -> None:
         """Enable or disable transaction actions that require a selection."""
 
@@ -886,6 +935,7 @@ class BudgetApp(tk.Tk):
     def _launch_ai_worker(self) -> None:
         if not self.ai_active or not self._ai_refresh_pending:
             return
+        processing_order = self._transaction_processing_order()
         stop_event = threading.Event()
         self._ai_stop_event = stop_event
         self._ai_refresh_pending = False
@@ -914,6 +964,7 @@ class BudgetApp(tk.Tk):
                     logger=log_message,
                     should_abort=should_abort,
                     on_suggestion=handle_suggestion,
+                    preferred_order=processing_order,
                 )
             except Exception as exc:  # noqa: BLE001 - surface unexpected failures
                 self.viewmodel.add_ai_log_entry(f"AI classification error: {exc}")
