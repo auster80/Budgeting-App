@@ -194,6 +194,8 @@ class TransactionClassifier:
             return fallback
 
         prompt = self._build_prompt(transaction, categories, examples)
+        if logger:
+            logger("Prompt sent to model:\n" + prompt)
         try:
             if logger:
                 logger(f"Requesting classification from model '{self.model}'.")
