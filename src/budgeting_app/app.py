@@ -14,10 +14,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 import matplotlib.dates as mdates
+from matplotlib.axes import Axes
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle, Wedge
+from matplotlib.text import Annotation
 
 from .ai import ClassificationResult
 from .viewmodels import BudgetViewModel
@@ -55,8 +57,8 @@ class BudgetApp(tk.Tk):
         self._chart_figure: Figure | None = None
         self._chart_type_var: tk.StringVar | None = None
         self._chart_hover_cid: int | None = None
-        self._chart_artist_labels: dict[object, str] = {}
-        self._chart_annotation = None
+        self._chart_artist_labels: dict[object, tuple[str, Axes]] = {}
+        self._chart_annotation: dict[Axes, Annotation] = {}
         self.status_var = tk.StringVar(value="Ready")
         self.ai_active = False
         self.ai_suggestions: dict[str, ClassificationResult] = {}
@@ -423,7 +425,7 @@ class BudgetApp(tk.Tk):
         canvas_widget.pack(fill="both", expand=True)
 
         self._chart_artist_labels = {}
-        self._chart_annotation = None
+        self._chart_annotation = {}
         self._chart_hover_cid = None
         self._render_chart()
 
@@ -435,7 +437,7 @@ class BudgetApp(tk.Tk):
         self._chart_figure = None
         self._chart_type_var = None
         self._chart_artist_labels = {}
-        self._chart_annotation = None
+        self._chart_annotation = {}
         self._chart_hover_cid = None
 
     def _refresh_chart(self) -> None:
@@ -457,14 +459,44 @@ class BudgetApp(tk.Tk):
         self._chart_figure.clear()
         ax = self._chart_figure.add_subplot(111)
         self._chart_artist_labels.clear()
-        self._chart_annotation = None
+        self._chart_annotation = {}
 
-        if chart_type == "Pie Chart":
-            self._plot_pie_chart(ax, data)
-        elif chart_type == "Line Chart":
-            self._plot_line_chart(ax, data)
-        else:
-            self._plot_bar_chart(ax, data)
+        income_data = [entry for entry in data if entry["actual"] >= 0]
+        expense_data = [entry for entry in data if entry["actual"] < 0]
+        sections: list[tuple[str, list[dict[str, object]], bool]] = []
+        if income_data:
+            sections.append(("Income", income_data, False))
+        if expense_data:
+            sections.append(("Expenses", expense_data, True))
+
+        if not sections:
+            ax.text(
+                0.5,
+                0.5,
+                "No categories to display",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            self._chart_canvas.draw_idle()
+            return
+
+        self._chart_figure.clear()
+        axes = self._chart_figure.subplots(len(sections), 1, squeeze=False)
+        axes_list = axes.flatten()
+
+        for subplot_ax, (section_label, section_data, is_expense) in zip(
+            axes_list, sections
+        ):
+            if chart_type == "Pie Chart":
+                self._plot_pie_chart(subplot_ax, section_data, section_label, is_expense)
+            elif chart_type == "Line Chart":
+                self._plot_line_chart(subplot_ax, section_data, section_label, is_expense)
+            else:
+                self._plot_bar_chart(subplot_ax, section_data, section_label, is_expense)
+
+        self._chart_figure.tight_layout()
 
         self._chart_canvas.draw_idle()
         self._connect_chart_hover()
@@ -496,7 +528,13 @@ class BudgetApp(tk.Tk):
         data.sort(key=lambda entry: entry["name"].lower())
         return data
 
-    def _plot_bar_chart(self, ax, data: list[dict[str, object]]) -> None:
+    def _plot_bar_chart(
+        self,
+        ax,
+        data: list[dict[str, object]],
+        section_label: str,
+        is_expense: bool,
+    ) -> None:
         if not data:
             ax.text(
                 0.5,
@@ -510,16 +548,17 @@ class BudgetApp(tk.Tk):
             return
 
         names = [entry["name"] for entry in data]
-        amounts = [entry["actual"] for entry in data]
+        amounts = [abs(entry["actual"]) if is_expense else entry["actual"] for entry in data]
         colors = [entry["color"] for entry in data]
         bars = ax.bar(names, amounts, color=colors)
         ax.set_ylabel("Actual Amount")
-        ax.set_title("Actual Spending by Category")
+        title = "Actual Income by Category" if not is_expense else "Actual Expenses by Category"
+        ax.set_title(f"{section_label}: {title}")
         ax.grid(axis="y", linestyle="--", alpha=0.3)
         ax.tick_params(axis="x", rotation=35)
 
         for bar, entry in zip(bars, data):
-            self._chart_artist_labels[bar] = entry["name"]
+            self._chart_artist_labels[bar] = (entry["name"], ax)
             height = bar.get_height()
             ax.annotate(
                 f"{height:.2f}",
@@ -531,7 +570,13 @@ class BudgetApp(tk.Tk):
                 fontsize=9,
             )
 
-    def _plot_line_chart(self, ax, data: list[dict[str, object]]) -> None:
+    def _plot_line_chart(
+        self,
+        ax,
+        data: list[dict[str, object]],
+        section_label: str,
+        is_expense: bool,
+    ) -> None:
         plotted = False
         for entry in data:
             transactions = entry["transactions"]
@@ -552,13 +597,13 @@ class BudgetApp(tk.Tk):
                 continue
             line, = ax.plot(
                 dates,
-                totals,
+                [abs(total) if is_expense else total for total in totals],
                 marker="o",
                 linewidth=2,
                 color=entry["color"],
                 label=entry["name"],
             )
-            self._chart_artist_labels[line] = entry["name"]
+            self._chart_artist_labels[line] = (entry["name"], ax)
             plotted = True
 
         if not plotted:
@@ -573,15 +618,23 @@ class BudgetApp(tk.Tk):
             ax.set_axis_off()
             return
 
-        ax.set_title("Cumulative Actuals Over Time")
+        title = "Income Trend" if not is_expense else "Expense Trend"
+        ax.set_title(f"{section_label}: {title}")
         ax.set_xlabel("Date")
-        ax.set_ylabel("Amount")
+        ylabel = "Amount" if not is_expense else "Amount (Absolute)"
+        ax.set_ylabel(ylabel)
         ax.legend(loc="upper left")
         ax.grid(True, linestyle="--", alpha=0.3)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
         self._chart_figure.autofmt_xdate()
 
-    def _plot_pie_chart(self, ax, data: list[dict[str, object]]) -> None:
+    def _plot_pie_chart(
+        self,
+        ax,
+        data: list[dict[str, object]],
+        section_label: str,
+        is_expense: bool,
+    ) -> None:
         meaningful = [entry for entry in data if abs(entry["actual"]) > 1e-9]
         if not meaningful:
             ax.text(
@@ -604,7 +657,8 @@ class BudgetApp(tk.Tk):
             autopct="%1.1f%%",
             pctdistance=0.8,
         )
-        ax.set_title("Category Actual Distribution")
+        title = "Income Distribution" if not is_expense else "Expense Distribution"
+        ax.set_title(f"{section_label}: {title}")
         ax.axis("equal")
         ax.legend(
             wedges,
@@ -618,7 +672,7 @@ class BudgetApp(tk.Tk):
             text.set_fontsize(9)
 
         for wedge, entry in zip(wedges, meaningful):
-            self._chart_artist_labels[wedge] = entry["name"]
+            self._chart_artist_labels[wedge] = (entry["name"], ax)
 
     def _connect_chart_hover(self) -> None:
         if not self._chart_canvas:
@@ -636,7 +690,7 @@ class BudgetApp(tk.Tk):
             self._hide_chart_annotation()
             return
 
-        for artist, label in self._chart_artist_labels.items():
+        for artist, (label, artist_ax) in self._chart_artist_labels.items():
             contains, details = artist.contains(event)
             if not contains:
                 continue
@@ -656,19 +710,21 @@ class BudgetApp(tk.Tk):
                 radius = artist.r * 0.7
                 x = artist.center[0] + radius * math.cos(theta)
                 y = artist.center[1] + radius * math.sin(theta)
-            self._show_chart_annotation(label, x, y)
+            self._show_chart_annotation(label, x, y, artist_ax)
             return
 
         self._hide_chart_annotation()
 
-    def _show_chart_annotation(self, label: str, x: float | None, y: float | None) -> None:
+    def _show_chart_annotation(
+        self, label: str, x: float | None, y: float | None, axis: Axes
+    ) -> None:
         if not self._chart_canvas or not self._chart_figure:
             return
-        ax = self._chart_figure.axes[0]
         if x is None or y is None:
             return
-        if self._chart_annotation is None:
-            self._chart_annotation = ax.annotate(
+        annotation = self._chart_annotation.get(axis)
+        if annotation is None:
+            annotation = axis.annotate(
                 label,
                 xy=(x, y),
                 xytext=(12, 12),
@@ -676,18 +732,25 @@ class BudgetApp(tk.Tk):
                 bbox=dict(boxstyle="round,pad=0.3", fc="#fdfdfd", ec="#333333", lw=0.5),
                 arrowprops=dict(arrowstyle="->", color="#333333", lw=0.5),
             )
+            self._chart_annotation[axis] = annotation
         else:
-            self._chart_annotation.xy = (x, y)
-            self._chart_annotation.set_text(label)
-            self._chart_annotation.set_position((12, 12))
-        self._chart_annotation.set_visible(True)
+            annotation.xy = (x, y)
+            annotation.set_text(label)
+            annotation.set_position((12, 12))
+
+        for ax, existing in self._chart_annotation.items():
+            existing.set_visible(ax is axis)
+
         self._chart_canvas.draw_idle()
 
     def _hide_chart_annotation(self) -> None:
-        if self._chart_annotation and self._chart_annotation.get_visible():
-            self._chart_annotation.set_visible(False)
-            if self._chart_canvas:
-                self._chart_canvas.draw_idle()
+        changed = False
+        for annotation in self._chart_annotation.values():
+            if annotation.get_visible():
+                annotation.set_visible(False)
+                changed = True
+        if changed and self._chart_canvas:
+            self._chart_canvas.draw_idle()
 
     # ------------------------------------------------------------------ #
     # Event handlers
