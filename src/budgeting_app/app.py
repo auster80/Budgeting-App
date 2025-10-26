@@ -40,6 +40,7 @@ class BudgetApp(tk.Tk):
 
         self.viewmodel.add_listener(self._on_data_changed)
         self.viewmodel.load()
+        self.protocol("WM_DELETE_WINDOW", self._handle_exit)
 
     # ------------------------------------------------------------------ #
     # Layout helpers
@@ -534,10 +535,31 @@ class BudgetApp(tk.Tk):
             f"skipped {preview.duplicate_count} duplicates."
         )
 
-    def _save_budget(self) -> None:
-        self.viewmodel.save()
-        messagebox.showinfo("Budget Saved", "Budget data saved successfully.")
+    def _persist_budget(self, *, show_confirmation: bool) -> bool:
+        try:
+            self.viewmodel.save()
+        except Exception as exc:
+            messagebox.showerror(
+                "Save Failed",
+                "Could not save budget data.\n\n" + str(exc),
+                parent=self,
+            )
+            self._set_status("Save failed.")
+            return False
+
+        if show_confirmation:
+            messagebox.showinfo(
+                "Budget Saved", "Budget data saved successfully.", parent=self
+            )
         self._set_status("Budget saved.")
+        return True
+
+    def _save_budget(self) -> None:
+        self._persist_budget(show_confirmation=True)
+
+    def _handle_exit(self) -> None:
+        if self._persist_budget(show_confirmation=False):
+            self.destroy()
 
     # ------------------------------------------------------------------ #
     # Data binding
@@ -771,7 +793,7 @@ class BudgetApp(tk.Tk):
         file_menu.add_command(label="Import CSV...", command=self._handle_import_csv)
         file_menu.add_command(label="Save Budget", command=self._save_budget)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.destroy)
+        file_menu.add_command(label="Exit", command=self._handle_exit)
         menu_bar.add_cascade(label="File", menu=file_menu)
 
         help_menu = tk.Menu(menu_bar, tearoff=0)
