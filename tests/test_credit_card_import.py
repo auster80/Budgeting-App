@@ -126,6 +126,50 @@ def test_import_credit_card_statement_replaces_counterbookings(tmp_path: Path) -
     assert len(viewmodel.ledger.transactions) == 4
 
 
+def test_import_credit_card_statement_prompts_all_counterbooking_candidates(
+    tmp_path: Path,
+) -> None:
+    csv_path = _write_sample_credit_card_csv(tmp_path)
+
+    ledger = BudgetLedger()
+    ledger.record_transaction(
+        description="Potential match 1",
+        amount=Decimal("-300.00"),
+        category_id=None,
+        occurred_on="2024-03-02",
+        transaction_id="BANK-1",
+    )
+    ledger.record_transaction(
+        description="Potential match 2",
+        amount=Decimal("-300.00"),
+        category_id=None,
+        occurred_on="2024-03-04",
+        transaction_id="BANK-2",
+    )
+
+    viewmodel = BudgetViewModel()
+    viewmodel.ledger = ledger
+
+    confirm_calls: list[tuple[str, str | None]] = []
+
+    def confirm_replacement(transaction, record: CSVTransaction) -> bool:
+        confirm_calls.append((transaction.transaction_id, record.reference))
+        return False
+
+    imported = viewmodel.import_credit_card_statement(
+        csv_path,
+        confirm_replacement=confirm_replacement,
+    )
+
+    assert imported == 4
+    assert confirm_calls == [
+        ("BANK-1", "CC1"),
+        ("BANK-2", "CC1"),
+    ]
+    assert any(txn.transaction_id == "BANK-1" for txn in viewmodel.ledger.transactions)
+    assert any(txn.transaction_id == "BANK-2" for txn in viewmodel.ledger.transactions)
+
+
 def test_import_credit_card_statement_without_matching_counterbooking(tmp_path: Path) -> None:
     csv_path = _write_sample_credit_card_csv(tmp_path)
 

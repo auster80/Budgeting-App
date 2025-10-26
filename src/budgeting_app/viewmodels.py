@@ -458,13 +458,13 @@ class BudgetViewModel:
             return 0
 
         match_window = timedelta(days=3)
-        matched_transaction_ids: set[str] = set()
         counterbookings: list[tuple[Transaction, CSVTransaction]] = []
+        candidate_pairs: set[tuple[str, int]] = set()
         quantize_amount = Decimal("0.01")
 
         default_card_account_id = statement_rows[0].account_id or "CREDIT-CARD"
         existing_transactions = list(self.ledger.transactions)
-        for record in statement_rows:
+        for index, record in enumerate(statement_rows):
             statement_amount = record.amount.quantize(quantize_amount)
             if statement_amount == 0:
                 continue
@@ -472,8 +472,6 @@ class BudgetViewModel:
             record_date = date.fromisoformat(record.occurred_on)
             record_account_id = record.account_id or default_card_account_id
             for txn in existing_transactions:
-                if txn.transaction_id in matched_transaction_ids:
-                    continue
                 if record.reference and txn.reference == record.reference:
                     continue
                 txn_amount = txn.amount.quantize(quantize_amount)
@@ -486,12 +484,16 @@ class BudgetViewModel:
                     continue
                 txn_date = date.fromisoformat(txn.occurred_on)
                 if abs((txn_date - record_date).days) <= match_window.days:
+                    pair_key = (txn.transaction_id, index)
+                    if pair_key in candidate_pairs:
+                        continue
                     counterbookings.append((txn, record))
-                    matched_transaction_ids.add(txn.transaction_id)
-                    break
+                    candidate_pairs.add(pair_key)
 
         removed_ids: set[str] = set()
         for txn, record in counterbookings:
+            if txn.transaction_id in removed_ids:
+                continue
             if confirm_replacement(txn, record):
                 removed_ids.add(txn.transaction_id)
 
