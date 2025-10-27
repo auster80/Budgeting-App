@@ -458,7 +458,7 @@ class BudgetViewModel:
             return 0
 
         match_window = timedelta(days=3)
-        counterbookings: list[tuple[Transaction, CSVTransaction]] = []
+        counterbookings: dict[int, list[Transaction]] = {}
         candidate_pairs: set[tuple[str, int]] = set()
         quantize_amount = Decimal("0.01")
 
@@ -487,15 +487,20 @@ class BudgetViewModel:
                     pair_key = (txn.transaction_id, index)
                     if pair_key in candidate_pairs:
                         continue
-                    counterbookings.append((txn, record))
                     candidate_pairs.add(pair_key)
+                    counterbookings.setdefault(index, []).append(txn)
 
         removed_ids: set[str] = set()
-        for txn, record in counterbookings:
-            if txn.transaction_id in removed_ids:
+        for record_index, record in enumerate(statement_rows):
+            candidates = counterbookings.get(record_index)
+            if not candidates:
                 continue
-            if confirm_replacement(txn, record):
-                removed_ids.add(txn.transaction_id)
+            for txn in candidates:
+                if txn.transaction_id in removed_ids:
+                    continue
+                if confirm_replacement(txn, record):
+                    removed_ids.add(txn.transaction_id)
+                    break
 
         if removed_ids:
             self.ledger.transactions = [
