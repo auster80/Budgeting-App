@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
 from .ai import ClassificationResult, TransactionClassifier
-from .csv_importer import CSVTransaction, read_transactions_from_csv
+from .csv_importer import (
+    CSVTransaction,
+    read_credit_card_statement,
+    read_transactions_from_csv,
+)
 from .models import BudgetLedger, BudgetCategory, Transaction
 from .storage import load_ledger, save_ledger
 
@@ -430,5 +435,129 @@ class BudgetViewModel:
             imported += 1
 
         if imported:
+            self._notify()
+        return imported
+
+    def _get_transfer_category_id(self) -> str:
+        for category_id, category in self.ledger.categories.items():
+            if category.name.lower() == self.ledger.TRANSFER_CATEGORY_NAME.lower():
+                return category_id
+        category = self.ledger.add_category(self.ledger.TRANSFER_CATEGORY_NAME, Decimal("0.00"))
+        return category.category_id
+
+    def import_credit_card_statement(
+        self,
+        path: str | Path,
+        *,
+        confirm_replacement: Callable[[Transaction, CSVTransaction], bool],
+    ) -> int:
+        """Import a credit-card statement and replace matching counterbookings."""
+
+        statement_rows = read_credit_card_statement(path)
+        if not statement_rows:
+            return 0
+
+        match_window = timedelta(days=3)
+        counterbookings: list[tuple[Transaction, CSVTransaction]] = []
+        candidate_pairs: set[tuple[str, int]] = set()
+        quantize_amount = Decimal("0.01")
+
+        default_card_account_id = statement_rows[0].account_id or "CREDIT-CARD"
+        existing_transactions = list(self.ledger.transactions)
+        for index, record in enumerate(statement_rows):
+            statement_amount = record.amount.quantize(quantize_amount)
+            if statement_amount == 0:
+                continue
+            ledger_amount = (-statement_amount).quantize(quantize_amount)
+            expected_counter_amounts = {ledger_amount}
+            if statement_amount < 0:
+                expected_counter_amounts.add((-ledger_amount))
+            record_date = date.fromisoformat(record.occurred_on)
+            record_account_id = record.account_id or default_card_account_id
+            for txn in existing_transactions:
+                txn_amount = txn.amount.quantize(quantize_amount)
+                if txn_amount == 0:
+                    continue
+                txn_account_id = (txn.account_id or "").strip()
+                if (
+                    record.reference
+                    and txn.reference == record.reference
+                    and txn_account_id in {record_account_id, default_card_account_id}
+                ):
+                    continue
+                if txn_account_id in {record_account_id, default_card_account_id}:
+                    continue
+                if txn_amount not in expected_counter_amounts:
+                    continue
+                txn_date = date.fromisoformat(txn.occurred_on)
+                if abs((txn_date - record_date).days) <= match_window.days:
+                    pair_key = (txn.transaction_id, index)
+                    if pair_key in candidate_pairs:
+                        continue
+                    counterbookings.append((txn, record))
+                    candidate_pairs.add(pair_key)
+
+        removed_ids: set[str] = set()
+        for txn, record in counterbookings:
+            if txn.transaction_id in removed_ids:
+                continue
+            if confirm_replacement(txn, record):
+                removed_ids.add(txn.transaction_id)
+
+        if removed_ids:
+            self.ledger.transactions = [
+                txn
+                for txn in self.ledger.transactions
+                if txn.transaction_id not in removed_ids
+            ]
+            self.ledger.detect_internal_transfers()
+            self.ledger.recalculate_actuals()
+
+        imported = 0
+        transfer_category_id: Optional[str] = None
+        positive_transactions: List[Transaction] = []
+
+        existing_reference_amounts = {
+            txn.reference: txn.amount.quantize(quantize_amount)
+            for txn in self.ledger.transactions
+            if txn.reference
+        }
+
+        default_account_id = default_card_account_id
+        default_account_name = statement_rows[0].account_name or "Credit Card"
+
+        for record in statement_rows:
+            ledger_amount = (-record.amount).quantize(quantize_amount)
+            if record.reference:
+                existing_amount = existing_reference_amounts.get(record.reference)
+                if existing_amount is not None and existing_amount == ledger_amount:
+                    continue
+            txn = self.ledger.record_transaction(
+                description=record.description,
+                amount=ledger_amount,
+                category_id=None,
+                occurred_on=record.occurred_on,
+                account_id=record.account_id or default_account_id,
+                account_name=record.account_name or default_account_name,
+                counterparty=record.counterparty,
+                reference=record.reference,
+                company=record.company,
+            )
+            if record.reference:
+                existing_reference_amounts[record.reference] = ledger_amount
+            if ledger_amount > 0:
+                if transfer_category_id is None:
+                    transfer_category_id = self._get_transfer_category_id()
+                positive_transactions.append(txn)
+            imported += 1
+
+        if transfer_category_id and positive_transactions:
+            for txn in positive_transactions:
+                txn.category_id = transfer_category_id
+            self.ledger.recalculate_actuals()
+        elif imported:
+            self.ledger.recalculate_actuals()
+
+        if imported or removed_ids:
             self._notify()
         return imported

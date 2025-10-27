@@ -20,6 +20,21 @@ DESCRIPTION_COLUMNS = (
     "Omschrijving-3",
 )
 
+CREDIT_CARD_REQUIRED_COLUMNS = ("Datum", "Omschrijving", "Bedrag")
+CREDIT_CARD_ACCOUNT_COLUMNS = (
+    "Kaartnummer",
+    "Pasnummer",
+    "Creditcardnummer",
+    "Card Number",
+)
+CREDIT_CARD_REFERENCE_COLUMNS = (
+    "Transactie ID",
+    "Transactie-ID",
+    "Referentie",
+    "Documentnummer",
+    "Volgnr",
+)
+
 
 @dataclass(slots=True)
 class CSVTransaction:
@@ -42,6 +57,18 @@ def _parse_decimal(value: str) -> Decimal:
     # Rabobank exports use comma as decimal separator.
     normalized = cleaned.replace(".", "").replace(",", ".")
     return Decimal(normalized)
+
+
+def _parse_credit_card_date(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("Credit card transaction is missing a date")
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(cleaned, fmt).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError(f"Unsupported credit card date format: '{value}'")
 
 
 def _pick_date(row: dict[str, str]) -> str:
@@ -127,3 +154,60 @@ def read_transactions_from_csv(path: str | Path) -> Iterable[CSVTransaction]:
             reference=_reference(row),
             company=extract_company_name(description),
         )
+
+
+def _credit_card_account(row: dict[str, str]) -> Optional[str]:
+    for column in CREDIT_CARD_ACCOUNT_COLUMNS:
+        value = row.get(column, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _credit_card_reference(row: dict[str, str]) -> Optional[str]:
+    for column in CREDIT_CARD_REFERENCE_COLUMNS:
+        value = row.get(column, "").strip()
+        if value:
+            return value
+    return None
+
+
+def read_credit_card_statement(path: str | Path) -> List[CSVTransaction]:
+    """Parse credit-card specific CSV exports into CSVTransaction records."""
+
+    csv_path = Path(path)
+    reader = _get_reader(csv_path)
+
+    fieldnames = reader.fieldnames or []
+    missing = [column for column in CREDIT_CARD_REQUIRED_COLUMNS if column not in fieldnames]
+    if missing:
+        raise ValueError(
+            "Credit card CSV is missing required columns: " + ", ".join(missing)
+        )
+
+    transactions: List[CSVTransaction] = []
+    for row in reader:
+        if not any((value or "").strip() for value in row.values()):
+            continue
+        amount = _parse_decimal(row.get("Bedrag", "0"))
+        description = row.get("Omschrijving", "").strip() or "Credit card transaction"
+        occurred_on = _parse_credit_card_date(row.get("Datum", ""))
+        reference = _credit_card_reference(row)
+        account_id = _credit_card_account(row)
+        account_name = row.get("Kaartnaam", "").strip() or "Credit Card"
+        counterparty = row.get("Winkel", "").strip() or row.get("Handelaar", "").strip()
+
+        transactions.append(
+            CSVTransaction(
+                description=description,
+                amount=amount,
+                occurred_on=occurred_on,
+                account_id=account_id or "CREDIT-CARD",
+                account_name=account_name,
+                counterparty=counterparty or None,
+                reference=reference,
+                company=extract_company_name(description),
+            )
+        )
+
+    return transactions
