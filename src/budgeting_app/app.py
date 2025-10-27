@@ -6,9 +6,11 @@ import threading
 import tkinter as tk
 import urllib.parse
 import webbrowser
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+from typing import Callable
 
 from .ai import ClassificationResult
 from .csv_importer import CSVTransaction
@@ -28,6 +30,20 @@ class BudgetApp(tk.Tk):
         self.viewmodel = viewmodel
         self.category_lookup: dict[str, str] = {}
         self.category_name_by_id: dict[str, str] = {}
+        self.category_colors: dict[str, str] = {}
+        self._color_palette = [
+            "#4E79A7",
+            "#F28E2B",
+            "#E15759",
+            "#76B7B2",
+            "#59A14F",
+            "#EDC948",
+            "#B07AA1",
+            "#FF9DA7",
+            "#9C755F",
+            "#BAB0AC",
+        ]
+        self._color_index = 0
         self.status_var = tk.StringVar(value="Ready")
         self.ai_active = False
         self.ai_suggestions: dict[str, ClassificationResult] = {}
@@ -36,6 +52,7 @@ class BudgetApp(tk.Tk):
         self._ai_stop_event: threading.Event | None = None
         self._ai_refresh_pending = False
         self._suspend_ai_refresh = False
+        self._category_chart_window: CategoryChartWindow | None = None
 
         self._configure_styles()
         self._build_menu()
@@ -154,6 +171,12 @@ class BudgetApp(tk.Tk):
             text="Delete Selected Category",
             command=self._handle_delete_category,
         ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+
+        ttk.Button(
+            categories_frame,
+            text="Visualise Actuals...",
+            command=self._open_category_visualisation,
+        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
     def _build_transactions_section(self, parent: ttk.Frame) -> None:
         transactions_frame = ttk.Labelframe(parent, text="Transactions", style="Card.TLabelframe")
@@ -329,6 +352,31 @@ class BudgetApp(tk.Tk):
         if messagebox.askyesno("Delete Category", "Delete the selected category?"):
             self.viewmodel.delete_category(category_id)
             self._set_status("Category deleted.")
+
+    def _open_category_visualisation(self) -> None:
+        data = self._build_chart_data()
+        if not data["incomes"]["categories"] and not data["expenses"]["categories"]:
+            messagebox.showinfo(
+                "No Data",
+                "Add categories with transactions to visualise actual values.",
+                parent=self,
+            )
+            return
+
+        if self._category_chart_window and self._category_chart_window.winfo_exists():
+            self._category_chart_window.update_data(data)
+            self._category_chart_window.lift()
+            self._category_chart_window.focus_set()
+            return
+
+        self._category_chart_window = CategoryChartWindow(
+            self,
+            data,
+            on_close=self._handle_chart_window_closed,
+        )
+
+    def _handle_chart_window_closed(self) -> None:
+        self._category_chart_window = None
 
     def _handle_add_transaction(self) -> None:
         description = self.txn_description_input.get().strip()
@@ -647,9 +695,16 @@ class BudgetApp(tk.Tk):
             self._request_ai_refresh()
         self._suspend_ai_refresh = False
 
-        self.category_table.populate(categories, key_field="category_id")
+        self._ensure_category_colors(categories)
+
+        self.category_table.populate(
+            categories,
+            key_field="category_id",
+            tag_getter=self._get_category_tags,
+        )
         self.transaction_table.populate(transactions, key_field="transaction_id")
         self._apply_ai_suggestions_to_table()
+        self._apply_category_row_styles()
 
         planned_total = sum(float(row["planned"]) for row in categories)
         actual_total = sum(float(row["actual"]) for row in categories)
@@ -664,6 +719,151 @@ class BudgetApp(tk.Tk):
         self._set_status("Budget data loaded.")
         self._refresh_ai_log()
         self._update_transaction_actions_state()
+
+        if self._category_chart_window and self._category_chart_window.winfo_exists():
+            self._category_chart_window.update_data(self._build_chart_data())
+        elif self._category_chart_window:
+            self._category_chart_window = None
+
+    def _ensure_category_colors(self, categories: list[dict[str, str]]) -> None:
+        existing_ids = {row.get("category_id", "") for row in categories if row.get("category_id")}
+        stale_ids = [category_id for category_id in self.category_colors if category_id not in existing_ids]
+        for category_id in stale_ids:
+            self.category_colors.pop(category_id, None)
+
+        for row in categories:
+            category_id = row.get("category_id")
+            if not category_id:
+                continue
+            if category_id not in self.category_colors:
+                self.category_colors[category_id] = self._get_next_color()
+
+    def _get_next_color(self) -> str:
+        if not self._color_palette:
+            return "#4E79A7"
+        color = self._color_palette[self._color_index % len(self._color_palette)]
+        self._color_index += 1
+        return color
+
+    def _get_category_tags(self, row: dict[str, str]) -> tuple[str, ...]:
+        category_id = row.get("category_id")
+        if not category_id:
+            return ()
+        if category_id not in self.category_colors:
+            return ()
+        return (f"category_color_{category_id}",)
+
+    def _apply_category_row_styles(self) -> None:
+        if not hasattr(self, "category_table"):
+            return
+        tree = self.category_table.tree
+        for category_id, color in self.category_colors.items():
+            tag = f"category_color_{category_id}"
+            tree.tag_configure(tag, background=color, foreground=self._get_contrasting_text(color))
+
+    @staticmethod
+    def _get_contrasting_text(color: str) -> str:
+        color = color.lstrip("#")
+        if len(color) != 6:
+            return "#000000"
+        try:
+            r = int(color[0:2], 16)
+            g = int(color[2:4], 16)
+            b = int(color[4:6], 16)
+        except ValueError:
+            return "#000000"
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+        return "#000000" if brightness > 140 else "#FFFFFF"
+
+    def _build_chart_data(self) -> dict[str, dict[str, object]]:
+        categories = list(self.viewmodel.categories_for_table())
+        self._ensure_category_colors(categories)
+
+        ledger = self.viewmodel.ledger
+        incomes_categories: list[dict[str, object]] = []
+        expenses_categories: list[dict[str, object]] = []
+        category_type: dict[str, str] = {}
+
+        for row in categories:
+            category_id = row.get("category_id")
+            if not category_id:
+                continue
+            color = self.category_colors.get(category_id)
+            if not color:
+                color = self._get_next_color()
+                self.category_colors[category_id] = color
+            name = row.get("name", "")
+            try:
+                actual_value = float(row.get("actual", "0") or 0.0)
+            except (TypeError, ValueError):
+                actual_value = 0.0
+            entry = {
+                "id": category_id,
+                "name": name,
+                "color": color,
+                "value": abs(actual_value) if actual_value < 0 else actual_value,
+            }
+            if actual_value >= 0:
+                incomes_categories.append(entry)
+                category_type[category_id] = "income"
+            else:
+                expenses_categories.append(entry)
+                category_type[category_id] = "expense"
+
+        income_date_totals: dict[str, dict[date, float]] = {}
+        expense_date_totals: dict[str, dict[date, float]] = {}
+
+        for txn in ledger.transactions:
+            category_id = txn.category_id
+            if not category_id or category_id not in category_type:
+                continue
+            if getattr(txn, "is_internal_transfer", False):
+                continue
+            try:
+                txn_date = datetime.fromisoformat(txn.occurred_on).date()
+            except ValueError:
+                continue
+            value = abs(float(txn.amount))
+            target = income_date_totals if category_type[category_id] == "income" else expense_date_totals
+            daily_totals = target.setdefault(category_id, {})
+            daily_totals[txn_date] = daily_totals.get(txn_date, 0.0) + value
+
+        income_dates = sorted({date for totals in income_date_totals.values() for date in totals})
+        expense_dates = sorted({date for totals in expense_date_totals.values() for date in totals})
+
+        income_series = self._normalise_series(income_date_totals, incomes_categories, income_dates)
+        expense_series = self._normalise_series(expense_date_totals, expenses_categories, expense_dates)
+
+        return {
+            "incomes": {
+                "categories": incomes_categories,
+                "dates": income_dates,
+                "series": income_series,
+            },
+            "expenses": {
+                "categories": expenses_categories,
+                "dates": expense_dates,
+                "series": expense_series,
+            },
+        }
+
+    def _normalise_series(
+        self,
+        date_totals: dict[str, dict[date, float]],
+        categories: list[dict[str, object]],
+        dates: list[date],
+    ) -> dict[str, list[float]]:
+        series: dict[str, list[float]] = {}
+        for category in categories:
+            category_id = str(category["id"])
+            per_date = date_totals.get(category_id, {})
+            running_total = 0.0
+            values: list[float] = []
+            for current_date in dates:
+                running_total += per_date.get(current_date, 0.0)
+                values.append(running_total)
+            series[category_id] = values
+        return series
 
     def _apply_ai_suggestions_to_table(self) -> None:
         """Populate the AI suggestion column for the rendered transactions."""
@@ -1124,6 +1324,341 @@ class BudgetApp(tk.Tk):
             self._ai_stop_event = None
             if self.ai_active and self._ai_refresh_pending:
                 self._launch_ai_worker()
+
+
+class CategoryChartWindow(tk.Toplevel):
+    """Popup window that renders category charts."""
+
+    def __init__(
+        self,
+        master: BudgetApp,
+        data: dict[str, dict[str, object]],
+        *,
+        on_close: Callable[[], None],
+    ) -> None:
+        super().__init__(master)
+        self.title("Category Visualisation")
+        self.transient(master)
+        self.resizable(True, True)
+        self._on_close = on_close
+        self._data: dict[str, dict[str, object]] = data
+        self.chart_type_var = tk.StringVar(value="Bar")
+        self._tooltip = _CanvasTooltip(self)
+
+        self._build_layout()
+        self.protocol("WM_DELETE_WINDOW", self._handle_close)
+        self.chart_type_var.trace_add("write", lambda *_: self._render_charts())
+        self.update_data(data)
+
+    def _build_layout(self) -> None:
+        container = ttk.Frame(self, padding=12)
+        container.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(2, weight=1)
+        container.rowconfigure(3, weight=1)
+
+        controls = ttk.Frame(container)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        controls.columnconfigure(1, weight=1)
+        ttk.Label(controls, text="Chart Type:").grid(row=0, column=0, sticky="w")
+        self.chart_selector = ttk.Combobox(
+            controls,
+            state="readonly",
+            textvariable=self.chart_type_var,
+            values=("Bar", "Line", "Pie"),
+        )
+        self.chart_selector.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        income_frame = ttk.Labelframe(container, text="Income", padding=6)
+        income_frame.grid(row=2, column=0, sticky="nsew")
+        expense_frame = ttk.Labelframe(container, text="Expenses", padding=6)
+        expense_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
+        income_frame.columnconfigure(0, weight=1)
+        income_frame.rowconfigure(0, weight=1)
+        expense_frame.columnconfigure(0, weight=1)
+        expense_frame.rowconfigure(0, weight=1)
+
+        self.income_canvas = tk.Canvas(income_frame, background="white", height=260)
+        self.income_canvas.grid(row=0, column=0, sticky="nsew")
+        self.expense_canvas = tk.Canvas(expense_frame, background="white", height=260)
+        self.expense_canvas.grid(row=0, column=0, sticky="nsew")
+
+        self.income_canvas.bind("<Configure>", lambda _event: self._render_charts())
+        self.expense_canvas.bind("<Configure>", lambda _event: self._render_charts())
+
+    def _handle_close(self) -> None:
+        if self._on_close:
+            callback = self._on_close
+            self._on_close = None
+            callback()
+        self.destroy()
+
+    def update_data(self, data: dict[str, dict[str, object]]) -> None:
+        self._data = data
+        self._render_charts()
+
+    def _render_charts(self) -> None:
+        chart_type = self.chart_type_var.get() or "Bar"
+        self._draw_chart(
+            self.income_canvas,
+            self._data.get("incomes", {}),
+            chart_type,
+            "No income data available.",
+        )
+        self._draw_chart(
+            self.expense_canvas,
+            self._data.get("expenses", {}),
+            chart_type,
+            "No expense data available.",
+        )
+
+    def _draw_chart(
+        self,
+        canvas: tk.Canvas,
+        payload: dict[str, object],
+        chart_type: str,
+        empty_message: str,
+    ) -> None:
+        canvas.delete("all")
+        categories: list[dict[str, object]] = list(payload.get("categories", []))
+        dates: list[date] = list(payload.get("dates", []))
+        series: dict[str, list[float]] = dict(payload.get("series", {}))
+
+        width = max(canvas.winfo_width(), 200)
+        height = max(canvas.winfo_height(), 200)
+        if chart_type == "Bar":
+            self._draw_bar_chart(canvas, categories, width, height, empty_message)
+        elif chart_type == "Line":
+            self._draw_line_chart(canvas, categories, dates, series, width, height, empty_message)
+        else:
+            self._draw_pie_chart(canvas, categories, width, height, empty_message)
+
+    def _draw_bar_chart(
+        self,
+        canvas: tk.Canvas,
+        categories: list[dict[str, object]],
+        width: int,
+        height: int,
+        empty_message: str,
+    ) -> None:
+        if not categories:
+            self._draw_empty(canvas, width, height, empty_message)
+            return
+        max_value = max(float(entry.get("value", 0.0)) for entry in categories)
+        if max_value <= 0:
+            self._draw_empty(canvas, width, height, empty_message)
+            return
+
+        margin_x = 60
+        margin_y = 40
+        plot_width = max(width - 2 * margin_x, 50)
+        plot_height = max(height - 2 * margin_y, 50)
+        base_y = height - margin_y
+        canvas.create_line(margin_x, base_y, width - margin_x / 2, base_y, fill="#666666")
+
+        count = len(categories)
+        step = plot_width / count
+        bar_width = step * 0.6
+
+        for index, entry in enumerate(categories):
+            value = float(entry.get("value", 0.0))
+            color = str(entry.get("color", "#4E79A7"))
+            ratio = value / max_value if max_value else 0
+            bar_height = ratio * plot_height
+            x_center = margin_x + step * index + step / 2
+            x0 = x_center - bar_width / 2
+            x1 = x_center + bar_width / 2
+            y0 = base_y - bar_height
+            bar = canvas.create_rectangle(x0, y0, x1, base_y, fill=color, outline="")
+            self._bind_tooltip(canvas, bar, f"{entry.get('name', '')}: {value:.2f}")
+
+    def _draw_line_chart(
+        self,
+        canvas: tk.Canvas,
+        categories: list[dict[str, object]],
+        dates: list[date],
+        series: dict[str, list[float]],
+        width: int,
+        height: int,
+        empty_message: str,
+    ) -> None:
+        if not categories or not dates:
+            self._draw_empty(canvas, width, height, empty_message)
+            return
+
+        max_value = 0.0
+        for entry in categories:
+            values = series.get(str(entry.get("id")), [])
+            if values:
+                max_value = max(max_value, max(values))
+        if max_value <= 0:
+            self._draw_empty(canvas, width, height, empty_message)
+            return
+
+        margin_x = 60
+        margin_y = 40
+        plot_width = max(width - 2 * margin_x, 50)
+        plot_height = max(height - 2 * margin_y, 50)
+        base_y = height - margin_y
+        canvas.create_line(margin_x, base_y, width - margin_x / 2, base_y, fill="#666666")
+
+        if len(dates) == 1:
+            x_positions = [margin_x + plot_width / 2]
+        else:
+            step = plot_width / (len(dates) - 1)
+            x_positions = [margin_x + step * idx for idx in range(len(dates))]
+
+        for entry in categories:
+            category_id = str(entry.get("id"))
+            values = series.get(category_id, [])
+            if not values:
+                continue
+            color = str(entry.get("color", "#4E79A7"))
+            points: list[float] = []
+            for idx, value in enumerate(values):
+                if idx >= len(x_positions):
+                    break
+                x = x_positions[idx]
+                ratio = value / max_value if max_value else 0
+                y = base_y - ratio * plot_height
+                points.extend([x, y])
+            if len(points) >= 4:
+                line = canvas.create_line(points, fill=color, width=3, smooth=True)
+                self._bind_tooltip(canvas, line, str(entry.get("name", "")))
+            elif len(points) == 2:
+                marker = canvas.create_oval(
+                    points[0] - 4,
+                    points[1] - 4,
+                    points[0] + 4,
+                    points[1] + 4,
+                    fill=color,
+                    outline="white",
+                )
+                self._bind_tooltip(canvas, marker, str(entry.get("name", "")))
+            for idx, value in enumerate(values):
+                if idx >= len(x_positions):
+                    break
+                x = x_positions[idx]
+                ratio = value / max_value if max_value else 0
+                y = base_y - ratio * plot_height
+                marker = canvas.create_oval(
+                    x - 4,
+                    y - 4,
+                    x + 4,
+                    y + 4,
+                    fill=color,
+                    outline="white",
+                )
+                date_label = dates[idx].isoformat() if idx < len(dates) else ""
+                tooltip_text = f"{entry.get('name', '')}: {value:.2f} on {date_label}"
+                self._bind_tooltip(canvas, marker, tooltip_text)
+
+    def _draw_pie_chart(
+        self,
+        canvas: tk.Canvas,
+        categories: list[dict[str, object]],
+        width: int,
+        height: int,
+        empty_message: str,
+    ) -> None:
+        total = sum(
+            float(entry.get("value", 0.0))
+            for entry in categories
+            if float(entry.get("value", 0.0)) > 0
+        )
+        if not categories or total <= 0:
+            self._draw_empty(canvas, width, height, empty_message)
+            return
+
+        center_x = width / 2
+        center_y = height / 2
+        radius = min(width, height) / 2 - 20
+        bbox = (
+            center_x - radius,
+            center_y - radius,
+            center_x + radius,
+            center_y + radius,
+        )
+        start_angle = 0.0
+        for entry in categories:
+            value = float(entry.get("value", 0.0))
+            if value <= 0:
+                continue
+            extent = (value / total) * 360
+            arc = canvas.create_arc(
+                bbox,
+                start=start_angle,
+                extent=extent,
+                fill=str(entry.get("color", "#4E79A7")),
+                outline="white",
+                width=2,
+            )
+            self._bind_tooltip(canvas, arc, f"{entry.get('name', '')}: {value:.2f}")
+            start_angle += extent
+
+    def _draw_empty(self, canvas: tk.Canvas, width: int, height: int, message: str) -> None:
+        canvas.create_text(
+            width / 2,
+            height / 2,
+            text=message,
+            fill="#666666",
+            font=("Segoe UI", 11, "italic"),
+        )
+
+    def _bind_tooltip(self, canvas: tk.Canvas, item: int, text: str) -> None:
+        if not text:
+            return
+
+        def _show(event) -> None:
+            self._tooltip.show(
+                text,
+                event.widget.winfo_rootx() + event.x + 12,
+                event.widget.winfo_rooty() + event.y + 12,
+            )
+
+        def _hide(_event) -> None:
+            self._tooltip.hide()
+
+        canvas.tag_bind(item, "<Enter>", _show)
+        canvas.tag_bind(item, "<Leave>", _hide)
+        canvas.tag_bind(item, "<Motion>", _show)
+
+
+class _CanvasTooltip:
+    """Simple tooltip helper for canvas hover interactions."""
+
+    def __init__(self, master: tk.Widget) -> None:
+        self._master = master
+        self._window: tk.Toplevel | None = None
+        self._label: ttk.Label | None = None
+
+    def show(self, text: str, x: int, y: int) -> None:
+        if not text:
+            return
+        if self._window is None or not self._window.winfo_exists():
+            self._window = tk.Toplevel(self._master)
+            self._window.overrideredirect(True)
+            self._window.attributes("-topmost", True)
+            self._label = ttk.Label(
+                self._window,
+                text=text,
+                background="#FFFFE0",
+                relief="solid",
+                borderwidth=1,
+                padding=(6, 2),
+            )
+            self._label.pack()
+        elif self._label:
+            self._label.configure(text=text)
+        if self._window:
+            self._window.geometry(f"+{x}+{y}")
+            self._window.deiconify()
+
+    def hide(self) -> None:
+        if self._window and self._window.winfo_exists():
+            self._window.withdraw()
 
 def run_app(data_file: str | None = None) -> None:
     """Convenience helper to start the Tkinter loop."""

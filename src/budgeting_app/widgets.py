@@ -97,13 +97,22 @@ class Table(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-    def populate(self, rows: list[dict[str, str]], *, key_field: str) -> None:
+    def populate(
+        self,
+        rows: list[dict[str, str]],
+        *,
+        key_field: str,
+        tag_getter: Callable[[dict[str, str]], tuple[str, ...]] | None = None,
+    ) -> None:
         """Populate the tree with data dictionaries."""
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             item_id = row.get(key_field, "")
             values = [row.get(column, "") for column in self.tree["columns"]]
-            self.tree.insert("", "end", iid=item_id, values=values)
+            tags: tuple[str, ...] = ()
+            if tag_getter:
+                tags = tag_getter(row)
+            self.tree.insert("", "end", iid=item_id, values=values, tags=tags)
         self._apply_sort()
 
     def bind_double_click(self, callback) -> None:
