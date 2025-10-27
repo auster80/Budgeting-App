@@ -196,6 +196,24 @@ class BudgetViewModel:
                 "occurred_on": txn.occurred_on,
             }
 
+    def income_and_expense_totals(self) -> tuple[Decimal, Decimal]:
+        """Return aggregated totals for income and expenses.
+
+        Internal transfers are excluded to avoid double-counting cash that
+        moves between the user's own accounts.
+        """
+
+        income_total = Decimal("0.00")
+        expense_total = Decimal("0.00")
+        for txn in self.ledger.transactions:
+            if txn.is_internal_transfer:
+                continue
+            if txn.amount > 0:
+                income_total += txn.amount
+            elif txn.amount < 0:
+                expense_total += -txn.amount
+        return income_total, expense_total
+
     # ------------------------------------------------------------------ #
     # AI assisted categorisation
     # ------------------------------------------------------------------ #

@@ -14,7 +14,7 @@ from .ai import ClassificationResult
 from .csv_importer import CSVTransaction
 from .models import Transaction
 from .viewmodels import BudgetViewModel, CSVImportPreview
-from .widgets import CurrencyEntry, LabeledEntry, Table
+from .widgets import CurrencyEntry, IncomeExpenseVisual, LabeledEntry, Table
 
 
 class BudgetApp(tk.Tk):
@@ -70,13 +70,16 @@ class BudgetApp(tk.Tk):
     def _build_totals_section(self, parent: ttk.Frame) -> None:
         totals_frame = ttk.Frame(parent)
         totals_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        totals_frame.columnconfigure(0, weight=1)
-        totals_frame.columnconfigure(1, weight=1)
-        totals_frame.columnconfigure(2, weight=1)
+        for idx in range(6):
+            totals_frame.columnconfigure(idx, weight=1)
+        totals_frame.columnconfigure(6, weight=0)
 
         self.planned_total_var = tk.StringVar(value="0.00")
         self.actual_total_var = tk.StringVar(value="0.00")
         self.remaining_total_var = tk.StringVar(value="0.00")
+        self.income_total_var = tk.StringVar(value="0.00")
+        self.expense_total_var = tk.StringVar(value="0.00")
+        self.net_cashflow_var = tk.StringVar(value="0.00")
 
         for idx, (label, var) in enumerate(
             [
@@ -98,6 +101,24 @@ class BudgetApp(tk.Tk):
             command=self._save_budget,
             style="Primary.TButton",
         ).grid(row=0, column=6, sticky="e")
+
+        for idx, (label, var) in enumerate(
+            [
+                ("Income:", self.income_total_var),
+                ("Expenses:", self.expense_total_var),
+                ("Net Cashflow:", self.net_cashflow_var),
+            ]
+        ):
+            ttk.Label(totals_frame, text=label, font=("Segoe UI", 10, "bold")).grid(
+                row=1, column=2 * idx, sticky="w", pady=(8, 0)
+            )
+            ttk.Label(totals_frame, textvariable=var, font=("Consolas", 12)).grid(
+                row=1, column=2 * idx + 1, sticky="w", pady=(8, 0)
+            )
+
+        self.cashflow_visual = IncomeExpenseVisual(totals_frame)
+        self.cashflow_visual.grid(row=2, column=0, columnspan=7, sticky="ew", pady=(12, 0))
+        self.cashflow_visual.update_values(income=0.0, expenses=0.0)
 
     def _build_categories_section(self, parent: ttk.Frame) -> None:
         categories_frame = ttk.Labelframe(
@@ -656,6 +677,25 @@ class BudgetApp(tk.Tk):
         self.planned_total_var.set(f"{planned_total:.2f}")
         self.actual_total_var.set(f"{actual_total:.2f}")
         self.remaining_total_var.set(f"{(planned_total - actual_total):.2f}")
+
+        income_total, expense_total = self.viewmodel.income_and_expense_totals()
+        net_cashflow = income_total - expense_total
+        self.income_total_var.set(f"{income_total:.2f}")
+        self.expense_total_var.set(f"{expense_total:.2f}")
+        self.net_cashflow_var.set(f"{net_cashflow:.2f}")
+        if hasattr(self, "cashflow_visual"):
+            try:
+                income_value = float(income_total)
+            except (TypeError, ValueError):
+                income_value = 0.0
+            try:
+                expense_value = float(expense_total)
+            except (TypeError, ValueError):
+                expense_value = 0.0
+            self.cashflow_visual.update_values(
+                income=income_value,
+                expenses=expense_value,
+            )
 
         self.category_lookup = {row["name"]: row["category_id"] for row in categories}
         self.category_name_by_id = {row["category_id"]: row["name"] for row in categories}
