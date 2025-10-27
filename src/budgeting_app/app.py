@@ -456,11 +456,6 @@ class BudgetApp(tk.Tk):
         chart_type = self._chart_type_var.get() if self._chart_type_var else "Bar Chart"
         data = self._get_category_chart_data()
 
-        self._chart_figure.clear()
-        ax = self._chart_figure.add_subplot(111)
-        self._chart_artist_labels.clear()
-        self._chart_annotation = {}
-
         income_data = [entry for entry in data if entry["actual"] >= 0]
         expense_data = [entry for entry in data if entry["actual"] < 0]
         sections: list[tuple[str, list[dict[str, object]], bool]] = []
@@ -469,7 +464,12 @@ class BudgetApp(tk.Tk):
         if expense_data:
             sections.append(("Expenses", expense_data, True))
 
+        self._chart_figure.clear()
+        self._chart_artist_labels.clear()
+        self._chart_annotation = {}
+
         if not sections:
+            ax = self._chart_figure.add_subplot(111)
             ax.text(
                 0.5,
                 0.5,
@@ -482,7 +482,6 @@ class BudgetApp(tk.Tk):
             self._chart_canvas.draw_idle()
             return
 
-        self._chart_figure.clear()
         axes = self._chart_figure.subplots(len(sections), 1, squeeze=False)
         axes_list = axes.flatten()
 
@@ -496,7 +495,8 @@ class BudgetApp(tk.Tk):
             else:
                 self._plot_bar_chart(subplot_ax, section_data, section_label, is_expense)
 
-        self._chart_figure.tight_layout()
+        if len(sections) > 1:
+            self._chart_figure.tight_layout()
 
         self._chart_canvas.draw_idle()
         self._connect_chart_hover()
