@@ -186,3 +186,127 @@ class Table(ttk.Frame):
                 text=text,
                 command=lambda col=column: self._toggle_sort(col),
             )
+
+
+class IncomeExpenseVisual(ttk.Frame):
+    """Canvas-based summary that renders income and expense bars."""
+
+    def __init__(self, master: tk.Widget, *, height: int = 96) -> None:
+        super().__init__(master)
+        style = ttk.Style(self)
+        background = style.lookup("TFrame", "background")
+        if not background:
+            try:
+                background = master.cget("background")  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - ttk widgets may not expose cget
+                background = "#f0f0f0"
+        self._background = background
+        self._text_color = style.lookup("TLabel", "foreground") or "#202020"
+        self._income = 0.0
+        self._expenses = 0.0
+
+        self._canvas = tk.Canvas(
+            self,
+            height=height,
+            highlightthickness=0,
+            background=self._background,
+            borderwidth=0,
+        )
+        self._canvas.pack(fill="both", expand=True)
+        self._canvas.bind("<Configure>", self._redraw)
+
+    def update_values(self, *, income: float, expenses: float) -> None:
+        """Update the visual with the latest totals."""
+
+        self._income = max(income, 0.0)
+        self._expenses = max(expenses, 0.0)
+        self._redraw()
+
+    # ------------------------------------------------------------------ #
+    # Rendering helpers
+    # ------------------------------------------------------------------ #
+    def _redraw(self, _event: object | None = None) -> None:
+        canvas = self._canvas
+        width = max(canvas.winfo_width(), 1)
+        height = max(canvas.winfo_height(), 1)
+        canvas.delete("all")
+
+        if self._income <= 0.0 and self._expenses <= 0.0:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="No income or expenses recorded yet",
+                fill="#666666",
+                font=("Segoe UI", 9),
+            )
+            return
+
+        margin = 16
+        available_width = max(width - 2 * margin, 1)
+        spacing = min(16, height * 0.2)
+        bar_height = max((height - (2 * margin) - spacing) / 2, 10)
+
+        max_value = max(self._income, self._expenses, 1.0)
+        bars = (
+            ("Income", self._income, "#2e7d32"),
+            ("Expenses", self._expenses, "#c62828"),
+        )
+
+        y = margin
+        label_font = ("Segoe UI", 9, "bold")
+        value_font = ("Consolas", 10)
+        for label, value, colour in bars:
+            proportion = 0.0 if max_value <= 0 else value / max_value
+            length = proportion * available_width
+            if value <= 0:
+                length = 0
+
+            x1 = margin
+            x2 = margin + length
+            if length > 0:
+                canvas.create_rectangle(
+                    x1,
+                    y,
+                    x2,
+                    y + bar_height,
+                    fill=colour,
+                    outline=colour,
+                )
+            else:
+                canvas.create_rectangle(
+                    x1,
+                    y,
+                    x1 + 2,
+                    y + bar_height,
+                    fill=colour,
+                    outline=colour,
+                )
+
+            canvas.create_text(
+                x1,
+                y - 2,
+                anchor="sw",
+                text=label,
+                font=label_font,
+                fill=self._text_color,
+            )
+
+            formatted = f"{value:,.2f}"
+            if length >= max(80, available_width * 0.3):
+                text_x = x1 + 8
+                anchor = "w"
+                fill = "#ffffff"
+            else:
+                text_x = x2 + 6
+                anchor = "w"
+                fill = self._text_color
+            canvas.create_text(
+                text_x,
+                y + bar_height / 2,
+                anchor=anchor,
+                text=formatted,
+                font=value_font,
+                fill=fill,
+            )
+
+            y += bar_height + spacing
