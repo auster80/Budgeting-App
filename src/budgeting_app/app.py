@@ -6,10 +6,13 @@ import threading
 import tkinter as tk
 import urllib.parse
 import webbrowser
+from decimal import Decimal
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .ai import ClassificationResult
+from .csv_importer import CSVTransaction
+from .models import Transaction
 from .viewmodels import BudgetViewModel, CSVImportPreview
 from .widgets import CurrencyEntry, LabeledEntry, Table
 
@@ -159,7 +162,7 @@ class BudgetApp(tk.Tk):
 
         form = ttk.Frame(transactions_frame)
         form.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        for idx in range(5):
+        for idx in range(6):
             form.columnconfigure(idx, weight=1)
 
         self.txn_description_input = LabeledEntry(form, label="Description")
@@ -187,6 +190,12 @@ class BudgetApp(tk.Tk):
             text="Import CSV...",
             command=self._handle_import_csv,
         ).grid(row=1, column=3, sticky="ew", padx=(12, 0), pady=(6, 0))
+
+        ttk.Button(
+            form,
+            text="Import Credit Card...",
+            command=self._handle_import_credit_card_statement,
+        ).grid(row=1, column=4, sticky="ew", padx=(12, 0), pady=(6, 0))
 
         self.transaction_table = Table(
             transactions_frame,
@@ -535,6 +544,69 @@ class BudgetApp(tk.Tk):
             f"skipped {preview.duplicate_count} duplicates."
         )
 
+    def _confirm_credit_card_replacement(
+        self, transaction: Transaction, record: CSVTransaction
+    ) -> bool:
+        statement_amount = record.amount.quantize(Decimal("0.01"))
+        description = (
+            "A potential counterbooking was found in your ledger.\n\n"
+            "Existing transaction:\n"
+            "{txn_date} - {txn_desc}\n"
+            "Amount: {txn_amount:.2f}\n\n"
+            "Statement entry:\n"
+            "{record_date} - {record_desc}\n"
+            "Amount: {record_amount:.2f}\n\n"
+            "Do you want to remove the ledger transaction?"
+        ).format(
+            txn_date=transaction.occurred_on,
+            txn_desc=transaction.description,
+            txn_amount=transaction.amount,
+            record_date=record.occurred_on,
+            record_desc=record.description,
+            record_amount=statement_amount,
+        )
+        return messagebox.askyesno(
+            "Remove Counterbooking", description, icon="question", default="yes", parent=self
+        )
+
+    def _handle_import_credit_card_statement(self) -> None:
+        file_path = filedialog.askopenfilename(
+            title="Select Credit Card Statement",
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+        )
+        if not file_path:
+            self._set_status("Credit card import cancelled.")
+            return
+
+        try:
+            imported = self.viewmodel.import_credit_card_statement(
+                file_path,
+                confirm_replacement=self._confirm_credit_card_replacement,
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Import Failed", str(exc))
+            self._set_status("Credit card import failed.")
+            return
+
+        if imported == 0:
+            messagebox.showinfo(
+                "Import Credit Card",
+                "No credit card transactions were imported.",
+                parent=self,
+            )
+            self._set_status("No credit card transactions were imported.")
+            return
+
+        messagebox.showinfo(
+            "Import Complete",
+            f"Imported {imported} credit card transactions.",
+            parent=self,
+        )
+        short_name = Path(file_path).name
+        self._set_status(
+            f"Imported {imported} credit card transactions from {short_name}."
+        )
+
     def _persist_budget(self, *, show_confirmation: bool) -> bool:
         try:
             self.viewmodel.save()
@@ -790,6 +862,10 @@ class BudgetApp(tk.Tk):
     def _build_menu(self) -> None:
         menu_bar = tk.Menu(self)
         file_menu = tk.Menu(menu_bar, tearoff=0)
+        file_menu.add_command(
+            label="Import Credit Card Statement...",
+            command=self._handle_import_credit_card_statement,
+        )
         file_menu.add_command(label="Import CSV...", command=self._handle_import_csv)
         file_menu.add_command(label="Save Budget", command=self._save_budget)
         file_menu.add_separator()
