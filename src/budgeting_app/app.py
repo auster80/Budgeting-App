@@ -227,6 +227,7 @@ class BudgetApp(tk.Tk):
             },
         )
         self.transaction_table.grid(row=2, column=0, sticky="nsew")
+        self.transaction_table.bind_yview(self._on_transaction_viewport_changed)
         self.transaction_table.tree.bind("<ButtonRelease-1>", self._handle_transaction_click)
         self.transaction_table.tree.bind(
             "<<TreeviewSelect>>", self._update_transaction_actions_state
@@ -916,6 +917,66 @@ class BudgetApp(tk.Tk):
         if not self._ai_worker_thread or not self._ai_worker_thread.is_alive():
             self._launch_ai_worker()
 
+    def _on_transaction_viewport_changed(self) -> None:
+        """Reprioritise AI categorisation when the visible rows change."""
+
+        if not self.ai_active or self._suspend_ai_refresh:
+            return
+        worker = self._ai_worker_thread
+        was_running = worker is not None and worker.is_alive()
+        self._request_ai_refresh()
+        if was_running and self._ai_stop_event and not self._ai_stop_event.is_set():
+            self._ai_stop_event.set()
+
+    def _transaction_processing_order(self) -> list[str]:
+        """Return transaction IDs in the order AI categorisation should follow."""
+
+        if not hasattr(self, "transaction_table"):
+            return []
+
+        tree = self.transaction_table.tree
+        children = list(tree.get_children(""))
+        if not children:
+            return []
+
+        try:
+            tree.update_idletasks()
+        except Exception:
+            pass
+
+        viewport_height = max(tree.winfo_height(), 1)
+        visible: list[str] = []
+        after_visible: list[str] = []
+        before_visible: list[str] = []
+        encountered_visible = False
+
+        for item_id in children:
+            bbox = tree.bbox(item_id)
+            is_visible = False
+            if bbox:
+                _x, y, _width, height = bbox
+                if viewport_height <= 1:
+                    is_visible = True
+                else:
+                    is_visible = (y + height) >= 0 and y <= viewport_height
+            if is_visible:
+                encountered_visible = True
+                visible.append(item_id)
+            elif not encountered_visible:
+                before_visible.append(item_id)
+            else:
+                after_visible.append(item_id)
+
+        ordered = visible + after_visible + before_visible
+        if not ordered:
+            ordered = children
+
+        return [
+            transaction_id
+            for transaction_id in ordered
+            if transaction_id and self._transaction_is_unassigned(transaction_id)
+        ]
+
     def _update_transaction_actions_state(self, _event=None) -> None:
         """Enable or disable transaction actions that require a selection."""
 
@@ -962,6 +1023,7 @@ class BudgetApp(tk.Tk):
     def _launch_ai_worker(self) -> None:
         if not self.ai_active or not self._ai_refresh_pending:
             return
+        processing_order = self._transaction_processing_order()
         stop_event = threading.Event()
         self._ai_stop_event = stop_event
         self._ai_refresh_pending = False
@@ -990,6 +1052,7 @@ class BudgetApp(tk.Tk):
                     logger=log_message,
                     should_abort=should_abort,
                     on_suggestion=handle_suggestion,
+                    preferred_order=processing_order,
                 )
             except Exception as exc:  # noqa: BLE001 - surface unexpected failures
                 self.viewmodel.add_ai_log_entry(f"AI classification error: {exc}")
@@ -998,18 +1061,49 @@ class BudgetApp(tk.Tk):
                 self.after(0, self._refresh_ai_log)
 
             if should_abort():
-                self.after(0, lambda: self._on_ai_worker_finished(collected, stop_event))
+                self.after(
+                    0,
+                    lambda results=dict(collected): self._on_ai_worker_finished(
+                        results,
+                        stop_event,
+                        aborted=True,
+                    ),
+                )
                 return
 
             final_results = suggestions or collected
-            self.after(0, lambda: self._on_ai_worker_finished(final_results, stop_event))
+            self.after(
+                0,
+                lambda results=dict(final_results): self._on_ai_worker_finished(
+                    results,
+                    stop_event,
+                    aborted=False,
+                ),
+            )
 
         thread = threading.Thread(target=worker, daemon=True)
         self._ai_worker_thread = thread
         thread.start()
 
+    @staticmethod
+    def _merge_ai_suggestions(
+        existing: dict[str, ClassificationResult],
+        updates: dict[str, ClassificationResult],
+        *,
+        replace: bool,
+    ) -> dict[str, ClassificationResult]:
+        if replace:
+            return dict(updates)
+        merged = dict(existing)
+        merged.update(updates)
+        return merged
+
     def _on_ai_worker_finished(
-        self, suggestions: dict[str, ClassificationResult], stop_event: threading.Event
+        self,
+        suggestions: dict[str, ClassificationResult],
+        stop_event: threading.Event,
+        *,
+        aborted: bool,
     ) -> None:
         if self._ai_stop_event is stop_event and self.ai_active:
             filtered = {
@@ -1017,7 +1111,11 @@ class BudgetApp(tk.Tk):
                 for txn_id, result in suggestions.items()
                 if self._transaction_is_unassigned(txn_id)
             }
-            self.ai_suggestions = filtered
+            self.ai_suggestions = self._merge_ai_suggestions(
+                self.ai_suggestions,
+                filtered,
+                replace=not aborted,
+            )
             self._suspend_ai_refresh = True
             self._on_data_changed(self.viewmodel.ledger)
 

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional, Sequence
 
 from .ai import ClassificationResult, TransactionClassifier
 from .csv_importer import (
@@ -207,6 +207,7 @@ class BudgetViewModel:
         on_suggestion: Optional[
             Callable[[str, ClassificationResult], None]
         ] = None,
+        preferred_order: Optional[Sequence[str]] = None,
     ) -> dict[str, ClassificationResult]:
         """Return AI category suggestions for unassigned transactions.
 
@@ -230,6 +231,20 @@ class BudgetViewModel:
             categorized_examples.append((txn, category.name))
 
         unassigned = [txn for txn in self.ledger.transactions if not txn.category_id]
+        if preferred_order:
+            remaining = {txn.transaction_id: txn for txn in unassigned if txn.transaction_id}
+            ordered_unassigned: list[Transaction] = []
+            for txn_id in preferred_order:
+                txn = remaining.pop(txn_id, None)
+                if txn:
+                    ordered_unassigned.append(txn)
+            if remaining:
+                for txn in unassigned:
+                    if txn.transaction_id and txn.transaction_id in remaining:
+                        ordered_unassigned.append(txn)
+                        remaining.pop(txn.transaction_id, None)
+            if ordered_unassigned:
+                unassigned = ordered_unassigned
         if not unassigned:
             log("No unassigned transactions to classify.")
             return {}
