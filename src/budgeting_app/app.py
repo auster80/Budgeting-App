@@ -48,7 +48,7 @@ class BudgetApp(tk.Tk):
         self.accent_purple = "#c084fc"
 
         self.configure(bg=self.bg_color)
-        self.option_add("*Font", "Segoe UI 10")
+        self.option_add("*Font", "{Segoe UI} 10")
         self.option_add("*TCombobox*Listbox.background", self.surface_dark)
         self.option_add("*TCombobox*Listbox.foreground", self.text_color)
         self.option_add("*TCombobox*Listbox.selectBackground", self.surface_selected)
@@ -1124,13 +1124,37 @@ class BudgetApp(tk.Tk):
             return ()
         return (f"category_color_{category_id}",)
 
+    def _soften_category_color(self, color: str, *, opacity: float = 0.6) -> str:
+        """Blend category colour with the table background to mimic transparency."""
+
+        base = self.surface_dark.lstrip("#")
+        active = color.lstrip("#")
+        if len(base) != 6 or len(active) != 6:
+            return color
+        try:
+            br, bg, bb = (int(base[i : i + 2], 16) for i in (0, 2, 4))
+            ar, ag, ab = (int(active[i : i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            return color
+        opacity = max(0.0, min(opacity, 1.0))
+        inv_opacity = 1.0 - opacity
+        rr = int(ar * opacity + br * inv_opacity)
+        rg = int(ag * opacity + bg * inv_opacity)
+        rb = int(ab * opacity + bb * inv_opacity)
+        return f"#{rr:02X}{rg:02X}{rb:02X}"
+
     def _apply_category_row_styles(self) -> None:
         if not hasattr(self, "category_table"):
             return
         tree = self.category_table.tree
         for category_id, color in self.category_colors.items():
             tag = f"category_color_{category_id}"
-            tree.tag_configure(tag, background=color, foreground=self._get_contrasting_text(color))
+            softened = self._soften_category_color(color)
+            tree.tag_configure(
+                tag,
+                background=softened,
+                foreground=self._get_contrasting_text(softened),
+            )
 
     @staticmethod
     def _get_contrasting_text(color: str) -> str:
