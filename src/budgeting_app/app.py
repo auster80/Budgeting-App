@@ -1356,6 +1356,8 @@ class BudgetApp(tk.Tk):
             category_id = row.get("category_id")
             if category_id:
                 return f"category:{category_id}"
+        if row_type == "unassigned":
+            return "category:unassigned"
         return None
 
     @staticmethod

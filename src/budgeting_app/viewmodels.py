@@ -166,8 +166,8 @@ class BudgetViewModel:
                         "difference": f"{(category.planned_amount - category.actual_amount):.2f}",
                         "parent": f"header:{header.header_id}",
                         "open": True,
-                    }
-                )
+                }
+            )
 
         for category in categories:
             if category.header_id:
@@ -186,6 +186,29 @@ class BudgetViewModel:
                     "open": True,
                 }
             )
+
+        unassigned_total = Decimal("0.00")
+        for txn in ledger.transactions:
+            if txn.category_id:
+                continue
+            if getattr(txn, "is_internal_transfer", False):
+                continue
+            unassigned_total += txn.amount
+
+        rows.append(
+            {
+                "row_id": "unassigned",
+                "row_type": "unassigned",
+                "category_id": None,
+                "header_id": None,
+                "name": "Unassigned",
+                "planned": "0.00",
+                "actual": f"{unassigned_total:.2f}",
+                "difference": f"{(Decimal('0.00') - unassigned_total):.2f}",
+                "parent": "",
+                "open": True,
+            }
+        )
 
         return rows
 
