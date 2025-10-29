@@ -68,6 +68,9 @@ class Table(ttk.Frame):
         column_options: Mapping[str, Mapping[str, Any]] | None = None,
         style: str | None = None,
         tree_style: str | None = None,
+        tree_column: str | None = None,
+        parent_field: str | None = None,
+        open_field: str | None = None,
     ) -> None:
         frame_kwargs: dict[str, Any] = {}
         if style:
@@ -76,23 +79,50 @@ class Table(ttk.Frame):
         tree_kwargs: dict[str, Any] = {}
         if tree_style:
             tree_kwargs["style"] = tree_style
+
+        self._tree_column = tree_column
+        self._parent_field = parent_field
+        self._open_field = open_field
+        self._sorting_enabled = tree_column is None
+
+        configured_columns = columns
+        show_mode = "headings"
+        if self._tree_column:
+            if self._tree_column not in columns:
+                raise ValueError(f"Tree column '{self._tree_column}' must be in columns")
+            configured_columns = tuple(col for col in columns if col != self._tree_column)
+            show_mode = "tree headings"
+
         self.tree = ttk.Treeview(
             self,
-            columns=columns,
-            show="headings",
+            columns=configured_columns,
+            show=show_mode,
             selectmode=selectmode,
             **tree_kwargs,
         )
         self._yview_callbacks: list[Callable[[], None]] = []
-        self._columns = columns
+        self._columns = configured_columns
         self._base_headings = {
             column: headings.get(column, column.replace("_", " ").title())
-            for column in columns
+            for column in self._columns
         }
+        self._tree_heading = (
+            headings.get(self._tree_column, self._tree_column.replace("_", " ").title())
+            if self._tree_column
+            else None
+        )
         self._sort_column: str | None = None
         self._sort_reverse = False
         column_options = column_options or {}
-        for column in columns:
+
+        if self._tree_column:
+            options = dict(column_options.get(self._tree_column, {}))
+            anchor = options.pop("anchor", "w")
+            stretch = options.pop("stretch", True)
+            self.tree.heading("#0", text=self._tree_heading or "")
+            self.tree.column("#0", anchor=anchor, stretch=stretch, **options)
+
+        for column in self._columns:
             anchor = "e" if column in {"planned", "actual", "difference", "amount"} else "w"
             options = dict(column_options.get(column, {}))
             anchor = options.pop("anchor", anchor)
@@ -108,20 +138,38 @@ class Table(ttk.Frame):
 
     def populate(
         self,
-        rows: list[dict[str, str]],
+        rows: list[dict[str, Any]],
         *,
         key_field: str,
-        tag_getter: Callable[[dict[str, str]], tuple[str, ...]] | None = None,
+        tag_getter: Callable[[dict[str, Any]], tuple[str, ...]] | None = None,
     ) -> None:
         """Populate the tree with data dictionaries."""
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             item_id = row.get(key_field, "")
+            if item_id is None:
+                continue
+            item_id = str(item_id)
             values = [row.get(column, "") for column in self.tree["columns"]]
+            text_value = row.get(self._tree_column, "") if self._tree_column else ""
             tags: tuple[str, ...] = ()
             if tag_getter:
                 tags = tag_getter(row)
-            self.tree.insert("", "end", iid=item_id, values=values, tags=tags)
+            parent_id = ""
+            if self._parent_field:
+                parent_id = str(row.get(self._parent_field, "") or "")
+            if parent_id and not self.tree.exists(parent_id):
+                parent_id = ""
+            item = self.tree.insert(
+                parent_id,
+                "end",
+                iid=item_id,
+                text=text_value,
+                values=values,
+                tags=tags,
+            )
+            if self._open_field:
+                self.tree.item(item, open=bool(row.get(self._open_field, True)))
         self._apply_sort()
 
     def bind_double_click(self, callback) -> None:
@@ -145,6 +193,8 @@ class Table(ttk.Frame):
         self._notify_yview_changed()
 
     def _toggle_sort(self, column: str) -> None:
+        if not self._sorting_enabled:
+            return
         if self._sort_column == column:
             self._sort_reverse = not self._sort_reverse
         else:
@@ -158,6 +208,9 @@ class Table(ttk.Frame):
         self._apply_sort()
 
     def _apply_sort(self) -> None:
+        if not self._sorting_enabled:
+            self._update_heading_indicators()
+            return
         if not self._sort_column:
             self._update_heading_indicators()
             return
@@ -196,11 +249,16 @@ class Table(ttk.Frame):
     def _update_heading_indicators(self) -> None:
         for column in self._columns:
             text = self._base_headings.get(column, column.replace("_", " ").title())
-            if column == self._sort_column:
-                arrow = "▼" if self._sort_reverse else "▲"
-                text = f"{text} {arrow}"
-            self.tree.heading(
-                column,
-                text=text,
-                command=lambda col=column: self._toggle_sort(col),
+            if self._sorting_enabled and column == self._sort_column:
+                arrow = " v" if self._sort_reverse else " ^"
+                text = f"{text}{arrow}"
+            command = (
+                (lambda col=column: self._toggle_sort(col))
+                if self._sorting_enabled
+                else None
             )
+            if command is not None:
+                self.tree.heading(column, text=text, command=command)
+            else:
+                self.tree.heading(column, text=text)
+                self.tree.heading(column, command="")

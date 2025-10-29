@@ -37,6 +37,7 @@ class BudgetCategory:
     planned_amount: Decimal = Decimal("0.00")
     actual_amount: Decimal = Decimal("0.00")
     category_id: str = field(default_factory=lambda: uuid4().hex)
+    header_id: str | None = None
 
     def apply_transaction(self, transaction: "Transaction") -> None:
         """Apply a transaction to this category's actual amount."""
@@ -57,6 +58,26 @@ class BudgetCategory:
             planned_amount=_to_decimal(payload.get("planned_amount", "0")),
             actual_amount=_to_decimal(payload.get("actual_amount", "0")),
             category_id=payload.get("category_id", uuid4().hex),
+            header_id=payload.get("header_id"),
+        )
+
+
+@dataclass(slots=True)
+class CategoryHeader:
+    """Represents a grouping header for related budgeting categories."""
+
+    name: str
+    header_id: str = field(default_factory=lambda: uuid4().hex)
+
+    def to_dict(self) -> Dict[str, str]:
+        data = asdict(self)
+        return data
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, str]) -> "CategoryHeader":
+        return cls(
+            name=payload["name"],
+            header_id=payload.get("header_id", uuid4().hex),
         )
 
 
@@ -116,6 +137,7 @@ class BudgetLedger:
 
     categories: Dict[str, BudgetCategory] = field(default_factory=dict)
     transactions: List[Transaction] = field(default_factory=list)
+    category_headers: Dict[str, CategoryHeader] = field(default_factory=dict)
 
     def add_category(
         self,
@@ -123,12 +145,17 @@ class BudgetLedger:
         planned_amount: float | int | str | Decimal = Decimal("0.00"),
         *,
         category_id: Optional[str] = None,
+        header_id: Optional[str] = None,
     ) -> BudgetCategory:
         """Create and register a new budget category."""
+
+        if header_id and header_id not in self.category_headers:
+            raise KeyError(f"Unknown header id '{header_id}'")
         category = BudgetCategory(
             name=name,
             planned_amount=_to_decimal(planned_amount),
             category_id=category_id or uuid4().hex,
+            header_id=header_id,
         )
         self.categories[category.category_id] = category
         return category
@@ -139,6 +166,7 @@ class BudgetLedger:
         *,
         name: str | None = None,
         planned_amount: float | int | str | Decimal | None = None,
+        header_id: Optional[str] = None,
     ) -> BudgetCategory:
         """Update the editable fields of an existing budget category."""
 
@@ -150,6 +178,10 @@ class BudgetLedger:
             category.name = name
         if planned_amount is not None:
             category.planned_amount = _to_decimal(planned_amount)
+        if header_id is not None:
+            if header_id and header_id not in self.category_headers:
+                raise KeyError(f"Unknown header id '{header_id}'")
+            category.header_id = header_id
         return category
 
     def remove_category(self, category_id: str) -> None:
@@ -158,6 +190,41 @@ class BudgetLedger:
         self.transactions = [
             txn for txn in self.transactions if txn.category_id != category_id
         ]
+
+    def add_header(
+        self,
+        name: str,
+        *,
+        header_id: Optional[str] = None,
+    ) -> CategoryHeader:
+        header = CategoryHeader(name=name, header_id=header_id or uuid4().hex)
+        self.category_headers[header.header_id] = header
+        return header
+
+    def update_header(self, header_id: str, *, name: str | None = None) -> CategoryHeader:
+        if header_id not in self.category_headers:
+            raise KeyError(f"Unknown header id '{header_id}'")
+        header = self.category_headers[header_id]
+        if name is not None:
+            header.name = name
+        return header
+
+    def remove_header(self, header_id: str) -> None:
+        if header_id not in self.category_headers:
+            return
+        self.category_headers.pop(header_id, None)
+        for category in self.categories.values():
+            if category.header_id == header_id:
+                category.header_id = None
+
+    def set_category_header(self, category_id: str, header_id: Optional[str]) -> BudgetCategory:
+        if category_id not in self.categories:
+            raise KeyError(f"Unknown category id '{category_id}'")
+        if header_id and header_id not in self.category_headers:
+            raise KeyError(f"Unknown header id '{header_id}'")
+        category = self.categories[category_id]
+        category.header_id = header_id
+        return category
 
     def record_transaction(
         self,
@@ -305,12 +372,18 @@ class BudgetLedger:
         return {
             "categories": [category.to_dict() for category in self.categories.values()],
             "transactions": [txn.to_dict() for txn in self.transactions],
+            "category_headers": [
+                header.to_dict() for header in self.category_headers.values()
+            ],
         }
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Iterable[Dict[str, str]]]) -> "BudgetLedger":
         """Rehydrate a ledger from serialised data."""
         ledger = cls()
+        for header_data in payload.get("category_headers", []):
+            header = CategoryHeader.from_dict(header_data)
+            ledger.category_headers[header.header_id] = header
         for category_data in payload.get("categories", []):
             category = BudgetCategory.from_dict(category_data)
             ledger.categories[category.category_id] = category

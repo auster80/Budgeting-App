@@ -9,8 +9,8 @@ import webbrowser
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, ttk
-from typing import Callable
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
+from typing import Any, Callable
 
 from .ai import ClassificationResult
 from .csv_importer import CSVTransaction
@@ -56,7 +56,11 @@ class BudgetApp(tk.Tk):
         self.option_add("*Entry.insertBackground", self.accent_teal)
         self.category_lookup: dict[str, str] = {}
         self.category_name_by_id: dict[str, str] = {}
+        self.header_name_by_id: dict[str, str] = {}
         self.category_colors: dict[str, str] = {}
+        self._category_rows_by_id: dict[str, dict[str, Any]] = {}
+        self._pending_category_selection: str | None = None
+        self._category_drag_data: dict[str, Any] | None = None
         self._color_palette = [
             "#4E79A7",
             "#F28E2B",
@@ -360,6 +364,9 @@ class BudgetApp(tk.Tk):
             },
             style="CardTable.TFrame",
             tree_style="Budget.Treeview",
+            tree_column="name",
+            parent_field="parent",
+            open_field="open",
         )
         self.category_table.grid(row=1, column=0, sticky="nsew")
         self.category_table.tree.configure(style="Budget.Treeview")
@@ -368,31 +375,51 @@ class BudgetApp(tk.Tk):
         self.category_table.tree.bind(
             "<Control-Button-1>", self._show_category_context_menu, add="+"
         )
+        self.category_table.tree.bind("<ButtonPress-1>", self._on_category_drag_start, add="+")
+        self.category_table.tree.bind("<B1-Motion>", self._on_category_drag_motion, add="+")
+        self.category_table.tree.bind("<ButtonRelease-1>", self._on_category_drag_release, add="+")
 
         self.category_context_menu = tk.Menu(self, tearoff=0)
         self.category_context_menu.add_command(
             label="Edit...",
             command=self._handle_edit_category,
         )
+        self.header_context_menu = tk.Menu(self, tearoff=0)
+        self.header_context_menu.add_command(
+            label="Rename...",
+            command=self._handle_rename_header,
+        )
+        self.header_context_menu.add_command(
+            label="Delete",
+            command=self._handle_delete_header,
+        )
 
         actions = tk.Frame(body, bg=self.card_bg)
         actions.grid(row=2, column=0, sticky="ew", pady=(16, 0))
         actions.columnconfigure(0, weight=1)
         actions.columnconfigure(1, weight=1)
+        actions.columnconfigure(2, weight=1)
+
+        ttk.Button(
+            actions,
+            text="Add Header",
+            command=self._handle_add_header,
+            style="Secondary.TButton",
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
         ttk.Button(
             actions,
             text="Delete Selected Category",
             command=self._handle_delete_category,
             style="Danger.TButton",
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ).grid(row=0, column=1, sticky="ew", padx=8)
 
         ttk.Button(
             actions,
             text="Visualise Actuals...",
             command=self._open_category_visualisation,
             style="Secondary.TButton",
-        ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ).grid(row=0, column=2, sticky="ew", padx=(8, 0))
 
     def _build_transactions_section(self, parent: tk.Widget) -> None:
         card, body = self._create_section_card(
@@ -708,15 +735,199 @@ class BudgetApp(tk.Tk):
         except ValueError:
             messagebox.showerror("Invalid Amount", "Planned amount must be numeric.")
 
-    def _handle_delete_category(self) -> None:
-        selected = self.category_table.tree.selection()
-        if not selected:
-            messagebox.showinfo("Select Category", "Select a category to delete.")
+    def _handle_add_header(self) -> None:
+        header_name = simpledialog.askstring(
+            "Add Header",
+            "Header name:",
+            parent=self,
+        )
+        if header_name is None:
             return
-        category_id = selected[0]
-        if messagebox.askyesno("Delete Category", "Delete the selected category?"):
-            self.viewmodel.delete_category(category_id)
-            self._set_status("Category deleted.")
+        header_name = header_name.strip()
+        if not header_name:
+            messagebox.showinfo("Missing Data", "Please provide a header name.", parent=self)
+            return
+        try:
+            header = self.viewmodel.add_header(header_name)
+        except Exception as exc:
+            messagebox.showerror("Add Header Failed", str(exc), parent=self)
+            return
+        self._set_status(f"Added header '{header.name}'.")
+
+    def _handle_rename_header(self) -> None:
+        tree = self.category_table.tree
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo(
+                "Select Header",
+                "Select a header to rename.",
+                parent=self,
+            )
+            return
+        row_id = selected[0]
+        row = self._category_rows_by_id.get(row_id)
+        if not row or row.get("row_type") != "header":
+            messagebox.showinfo(
+                "Select Header",
+                "Select a header to rename.",
+                parent=self,
+            )
+            return
+        header_id = str(row.get("header_id", ""))
+        header = self.viewmodel.ledger.category_headers.get(header_id)
+        if not header:
+            messagebox.showerror(
+                "Header Missing",
+                "The selected header could not be found.",
+                parent=self,
+            )
+            return
+        new_name = simpledialog.askstring(
+            "Rename Header",
+            "Header name:",
+            initialvalue=header.name,
+            parent=self,
+        )
+        if new_name is None:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            messagebox.showinfo("Missing Data", "Please provide a header name.", parent=self)
+            return
+        try:
+            self.viewmodel.update_header(header_id, name=new_name)
+        except Exception as exc:
+            messagebox.showerror("Rename Header Failed", str(exc), parent=self)
+            return
+        self._set_status(f"Renamed header to '{new_name}'.")
+
+    def _handle_delete_header(self) -> None:
+        tree = self.category_table.tree
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo(
+                "Select Header",
+                "Select a header to delete.",
+                parent=self,
+            )
+            return
+        row_id = selected[0]
+        row = self._category_rows_by_id.get(row_id)
+        if not row or row.get("row_type") != "header":
+            messagebox.showinfo(
+                "Select Header",
+                "Select a header to delete.",
+                parent=self,
+            )
+            return
+        header_id = str(row.get("header_id", ""))
+        header_name = row.get("name", "")
+        if not messagebox.askyesno(
+            "Delete Header",
+            f"Delete header '{header_name}'?\nCategories underneath will be ungrouped.",
+            parent=self,
+        ):
+            return
+        self.viewmodel.delete_header(header_id)
+        self._set_status(f"Deleted header '{header_name}'.")
+
+    def _on_category_drag_start(self, event) -> None:
+        tree = self.category_table.tree
+        row_id = tree.identify_row(event.y)
+        row = self._category_rows_by_id.get(row_id or "")
+        if not row or row.get("row_type") != "category":
+            self._category_drag_data = None
+            return
+        self._category_drag_data = {
+            "item_id": row_id,
+            "start_y": event.y,
+            "dragging": False,
+        }
+
+    def _on_category_drag_motion(self, event) -> None:
+        drag = self._category_drag_data
+        if not drag:
+            return
+        if not drag.get("dragging") and abs(event.y - drag.get("start_y", event.y)) > 5:
+            drag["dragging"] = True
+            self.category_table.tree.configure(cursor="hand2")
+        if drag.get("dragging"):
+            row_id = self.category_table.tree.identify_row(event.y)
+            if row_id:
+                self.category_table.tree.selection_set(row_id)
+
+    def _on_category_drag_release(self, event) -> None:
+        tree = self.category_table.tree
+        drag = self._category_drag_data
+        self._category_drag_data = None
+        tree.configure(cursor="")
+        if not drag or not drag.get("dragging"):
+            return
+        source_id = drag.get("item_id")
+        source_row = self._category_rows_by_id.get(source_id or "")
+        if not source_row or source_row.get("row_type") != "category":
+            return
+        target_row_id = tree.identify_row(event.y)
+        new_header_id: str | None
+        if not target_row_id:
+            new_header_id = None
+        else:
+            target_row = self._category_rows_by_id.get(target_row_id)
+            if not target_row:
+                new_header_id = None
+            elif target_row.get("row_type") == "header":
+                new_header_id = target_row.get("header_id")
+            elif target_row.get("row_type") == "category":
+                new_header_id = target_row.get("header_id")
+            else:
+                new_header_id = None
+        current_header_id = source_row.get("header_id")
+        if current_header_id == new_header_id:
+            return
+        category_id = str(source_row.get("category_id"))
+        self._pending_category_selection = category_id
+        try:
+            self.viewmodel.set_category_header(category_id, new_header_id)
+        except Exception as exc:
+            self._pending_category_selection = None
+            messagebox.showerror("Move Failed", str(exc), parent=self)
+            return
+        destination = (
+            self.viewmodel.ledger.category_headers[new_header_id].name
+            if new_header_id and new_header_id in self.viewmodel.ledger.category_headers
+            else "Ungrouped"
+        )
+        self._set_status(f"Moved category '{source_row.get('name', '')}' to {destination}.")
+
+    def _handle_delete_category(self) -> None:
+        tree = self.category_table.tree
+        selected = tree.selection()
+        if not selected:
+            messagebox.showinfo(
+                "Select Category",
+                "Select a category to delete.",
+                parent=self,
+            )
+            return
+        row_id = selected[0]
+        row = self._category_rows_by_id.get(row_id)
+        if not row or row.get("row_type") != "category":
+            messagebox.showinfo(
+                "Select Category",
+                "Select a category to delete.",
+                parent=self,
+            )
+            return
+        category_id = str(row.get("category_id"))
+        category_name = row.get("name", "")
+        if not messagebox.askyesno(
+            "Delete Category",
+            f"Delete category '{category_name}'?",
+            parent=self,
+        ):
+            return
+        self.viewmodel.delete_category(category_id)
+        self._set_status(f"Deleted category '{category_name}'.")
 
     def _open_category_visualisation(self) -> None:
         data = self._build_chart_data()
@@ -1052,6 +1263,7 @@ class BudgetApp(tk.Tk):
     # ------------------------------------------------------------------ #
     def _on_data_changed(self, _ledger) -> None:
         categories = list(self.viewmodel.categories_for_table())
+        category_rows = list(self.viewmodel.category_hierarchy_for_table())
         transactions = list(self.viewmodel.transactions_for_table())
 
         self._prune_ai_suggestions()
@@ -1060,16 +1272,30 @@ class BudgetApp(tk.Tk):
             self._request_ai_refresh()
         self._suspend_ai_refresh = False
 
-        self._ensure_category_colors(categories)
+        self._category_rows_by_id = {row["row_id"]: row for row in category_rows}
+        self.header_name_by_id = {
+            header.header_id: header.name
+            for header in self.viewmodel.ledger.category_headers.values()
+        }
+
+        self._ensure_category_colors(category_rows)
 
         self.category_table.populate(
-            categories,
-            key_field="category_id",
+            category_rows,
+            key_field="row_id",
             tag_getter=self._get_category_tags,
         )
         self.transaction_table.populate(transactions, key_field="transaction_id")
         self._apply_ai_suggestions_to_table()
         self._apply_category_row_styles()
+        self.category_table.tree.tag_configure("header_row", font=("Segoe UI", 10, "bold"))
+
+        if self._pending_category_selection:
+            target_id = self._pending_category_selection
+            if target_id and self.category_table.tree.exists(target_id):
+                self.category_table.tree.selection_set(target_id)
+                self.category_table.tree.see(target_id)
+            self._pending_category_selection = None
 
         planned_total = sum(float(row["planned"]) for row in categories)
         actual_total = sum(float(row["actual"]) for row in categories)
@@ -1096,18 +1322,20 @@ class BudgetApp(tk.Tk):
         elif self._category_chart_window:
             self._category_chart_window = None
 
-    def _ensure_category_colors(self, categories: list[dict[str, str]]) -> None:
-        existing_ids = {row.get("category_id", "") for row in categories if row.get("category_id")}
-        stale_ids = [category_id for category_id in self.category_colors if category_id not in existing_ids]
-        for category_id in stale_ids:
-            self.category_colors.pop(category_id, None)
+    def _ensure_category_colors(self, rows: list[dict[str, Any]]) -> None:
+        desired_keys: set[str] = set()
+        for row in rows:
+            color_key = self._category_color_key(row)
+            if color_key:
+                desired_keys.add(color_key)
 
-        for row in categories:
-            category_id = row.get("category_id")
-            if not category_id:
-                continue
-            if category_id not in self.category_colors:
-                self.category_colors[category_id] = self._get_next_color()
+        stale_keys = [key for key in self.category_colors if key not in desired_keys]
+        for key in stale_keys:
+            self.category_colors.pop(key, None)
+
+        for color_key in desired_keys:
+            if color_key not in self.category_colors:
+                self.category_colors[color_key] = self._get_next_color()
 
     def _get_next_color(self) -> str:
         if not self._color_palette:
@@ -1116,13 +1344,33 @@ class BudgetApp(tk.Tk):
         self._color_index += 1
         return color
 
-    def _get_category_tags(self, row: dict[str, str]) -> tuple[str, ...]:
-        category_id = row.get("category_id")
-        if not category_id:
-            return ()
-        if category_id not in self.category_colors:
-            return ()
-        return (f"category_color_{category_id}",)
+    def _category_color_key(self, row: dict[str, Any]) -> str | None:
+        row_type = row.get("row_type")
+        if row_type == "header":
+            header_id = row.get("header_id")
+            return f"header:{header_id}" if header_id else None
+        if row_type == "category":
+            header_id = row.get("header_id")
+            if header_id:
+                return f"header:{header_id}"
+            category_id = row.get("category_id")
+            if category_id:
+                return f"category:{category_id}"
+        return None
+
+    @staticmethod
+    def _color_tag_name(color_key: str) -> str:
+        safe_key = str(color_key).replace(":", "_")
+        return f"category_color_{safe_key}"
+
+    def _get_category_tags(self, row: dict[str, Any]) -> tuple[str, ...]:
+        tags: list[str] = []
+        color_key = self._category_color_key(row)
+        if color_key and color_key in self.category_colors:
+            tags.append(self._color_tag_name(color_key))
+        if row.get("row_type") == "header":
+            tags.append("header_row")
+        return tuple(tags)
 
     def _soften_category_color(self, color: str, *, opacity: float = 0.6) -> str:
         """Blend category colour with the table background to mimic transparency."""
@@ -1147,8 +1395,8 @@ class BudgetApp(tk.Tk):
         if not hasattr(self, "category_table"):
             return
         tree = self.category_table.tree
-        for category_id, color in self.category_colors.items():
-            tag = f"category_color_{category_id}"
+        for color_key, color in self.category_colors.items():
+            tag = self._color_tag_name(color_key)
             softened = self._soften_category_color(color)
             tree.tag_configure(
                 tag,
@@ -1171,22 +1419,26 @@ class BudgetApp(tk.Tk):
         return "#000000" if brightness > 140 else "#FFFFFF"
 
     def _build_chart_data(self) -> dict[str, dict[str, object]]:
-        categories = list(self.viewmodel.categories_for_table())
-        self._ensure_category_colors(categories)
+        hierarchy_rows = list(self.viewmodel.category_hierarchy_for_table())
+        self._ensure_category_colors(hierarchy_rows)
 
         ledger = self.viewmodel.ledger
+        category_rows = [row for row in hierarchy_rows if row.get("row_type") == "category"]
         incomes_categories: list[dict[str, object]] = []
         expenses_categories: list[dict[str, object]] = []
         category_type: dict[str, str] = {}
 
-        for row in categories:
+        for row in category_rows:
             category_id = row.get("category_id")
             if not category_id:
                 continue
-            color = self.category_colors.get(category_id)
+            ledger_category = ledger.categories.get(category_id)
+            header_id = getattr(ledger_category, "header_id", None) if ledger_category else None
+            color_key = f"header:{header_id}" if header_id else f"category:{category_id}"
+            color = self.category_colors.get(color_key)
             if not color:
                 color = self._get_next_color()
-                self.category_colors[category_id] = color
+                self.category_colors[color_key] = color
             name = row.get("name", "")
             try:
                 actual_value = float(row.get("actual", "0") or 0.0)
@@ -1344,7 +1596,11 @@ class BudgetApp(tk.Tk):
         selected = self.category_table.tree.selection()
         if not selected:
             return
-        category_id = selected[0]
+        row_id = selected[0]
+        row = self._category_rows_by_id.get(row_id)
+        if not row or row.get("row_type") != "category":
+            return
+        category_id = str(row.get("category_id", ""))
         category_name = self.category_name_by_id.get(category_id)
         if not category_name:
             return
@@ -1358,10 +1614,18 @@ class BudgetApp(tk.Tk):
             return
         tree.selection_set(row_id)
         tree.focus(row_id)
+        row = self._category_rows_by_id.get(row_id)
+        if not row:
+            return
+        menu = (
+            self.category_context_menu
+            if row.get("row_type") == "category"
+            else self.header_context_menu
+        )
         try:
-            self.category_context_menu.tk_popup(event.x_root, event.y_root)
+            menu.tk_popup(event.x_root, event.y_root)
         finally:
-            self.category_context_menu.grab_release()
+            menu.grab_release()
 
     def _handle_edit_category(self) -> None:
         selected = self.category_table.tree.selection()
@@ -1372,7 +1636,16 @@ class BudgetApp(tk.Tk):
                 parent=self,
             )
             return
-        category_id = selected[0]
+        row_id = selected[0]
+        row = self._category_rows_by_id.get(row_id)
+        if not row or row.get("row_type") != "category":
+            messagebox.showinfo(
+                "Select Category",
+                "Select a category to edit.",
+                parent=self,
+            )
+            return
+        category_id = str(row.get("category_id"))
         category = self.viewmodel.ledger.categories.get(category_id)
         if not category:
             messagebox.showerror(

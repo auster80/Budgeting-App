@@ -4,133 +4,162 @@
       "name": "Mortage",
       "planned_amount": "0",
       "actual_amount": "-9612.56",
-      "category_id": "335101fa6b8d4e09b8ed1417ec5a52fd"
+      "category_id": "335101fa6b8d4e09b8ed1417ec5a52fd",
+      "header_id": "cc97c2e85a854306852704c979dbcadc"
     },
     {
       "name": "Home Improvement",
       "planned_amount": "0.00",
       "actual_amount": "-285.54",
-      "category_id": "9f19faa346bd4c578fd8b35ef53bd089"
+      "category_id": "9f19faa346bd4c578fd8b35ef53bd089",
+      "header_id": null
     },
     {
       "name": "Groceries",
       "planned_amount": "0.00",
       "actual_amount": "-3108.50",
-      "category_id": "6053bd95d7d848328bcd30b7d4f371e3"
+      "category_id": "6053bd95d7d848328bcd30b7d4f371e3",
+      "header_id": "5add4f6a858b41379027389fa010f830"
     },
     {
       "name": "Bank Fees",
       "planned_amount": "0.00",
       "actual_amount": "-10.51",
-      "category_id": "a70731b661a74e8eb94eb9ff5e28102f"
+      "category_id": "a70731b661a74e8eb94eb9ff5e28102f",
+      "header_id": "cc97c2e85a854306852704c979dbcadc"
     },
     {
       "name": "Utilities",
       "planned_amount": "0.00",
-      "actual_amount": "-261.14",
-      "category_id": "44394a6f3f3340beaffc21d8b0c95677"
+      "actual_amount": "-270.81",
+      "category_id": "44394a6f3f3340beaffc21d8b0c95677",
+      "header_id": "cc97c2e85a854306852704c979dbcadc"
     },
     {
       "name": "Health Expenses",
       "planned_amount": "0.00",
-      "actual_amount": "65.22",
-      "category_id": "e2241fab2eb243c2bd8f5235338c3326"
+      "actual_amount": "220.20",
+      "category_id": "e2241fab2eb243c2bd8f5235338c3326",
+      "header_id": null
     },
     {
       "name": "Income",
       "planned_amount": "0",
       "actual_amount": "25277.58",
-      "category_id": "7b1d97be9d474a64b484d01041679a4b"
+      "category_id": "7b1d97be9d474a64b484d01041679a4b",
+      "header_id": "5ce04afbef0245858d1e5d3afc523321"
     },
     {
       "name": "Insurance",
       "planned_amount": "0.00",
-      "actual_amount": "2338.87",
-      "category_id": "43524b51f8624801a74671ecd3a2ccd0"
+      "actual_amount": "2303.78",
+      "category_id": "43524b51f8624801a74671ecd3a2ccd0",
+      "header_id": "cc97c2e85a854306852704c979dbcadc"
     },
     {
       "name": "Eating Out",
       "planned_amount": "0",
-      "actual_amount": "-1242.22",
-      "category_id": "f016f6d0c569459ebf10dea301ef21d8"
+      "actual_amount": "-1331.65",
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
+      "header_id": "5add4f6a858b41379027389fa010f830"
     },
     {
       "name": "Shopping",
       "planned_amount": "0",
-      "actual_amount": "-900.31",
-      "category_id": "ad417b90ff0d4d8fbf9a09f845d6da80"
+      "actual_amount": "-911.26",
+      "category_id": "ad417b90ff0d4d8fbf9a09f845d6da80",
+      "header_id": "30de05b8c4e7446098b2b3629db4ca91"
     },
     {
       "name": "Sport",
       "planned_amount": "0",
       "actual_amount": "-2902.18",
-      "category_id": "28c1fcc20db94115a799bf0fd42d32cb"
+      "category_id": "28c1fcc20db94115a799bf0fd42d32cb",
+      "header_id": null
     },
     {
       "name": "Electronics",
       "planned_amount": "0",
       "actual_amount": "-880.24",
-      "category_id": "3857d95b97b845438232841079a4ff4a"
+      "category_id": "3857d95b97b845438232841079a4ff4a",
+      "header_id": "30de05b8c4e7446098b2b3629db4ca91"
     },
     {
       "name": "Cash Withdrawal",
       "planned_amount": "0",
       "actual_amount": "-955.44",
-      "category_id": "f7e3214b04334ea78e18627f41ff0859"
+      "category_id": "f7e3214b04334ea78e18627f41ff0859",
+      "header_id": null
     },
     {
       "name": "Belasting",
       "planned_amount": "0",
       "actual_amount": "343.49",
-      "category_id": "b8bce63b0fc1428db4bd5493a81a2d79"
+      "category_id": "b8bce63b0fc1428db4bd5493a81a2d79",
+      "header_id": "cc97c2e85a854306852704c979dbcadc"
     },
     {
       "name": "Transportation",
       "planned_amount": "0.00",
       "actual_amount": "-1477.86",
-      "category_id": "c20e06e6dc2b4c21881b111cc63d5fcd"
+      "category_id": "c20e06e6dc2b4c21881b111cc63d5fcd",
+      "header_id": null
     },
     {
       "name": "Transfers",
       "planned_amount": "0.00",
       "actual_amount": "0.00",
-      "category_id": "0741d1f03af44f3d9256e841641b0b4b"
+      "category_id": "0741d1f03af44f3d9256e841641b0b4b",
+      "header_id": null
     },
     {
       "name": "Donations",
       "planned_amount": "0",
       "actual_amount": "-10.00",
-      "category_id": "9bbeb3037d4e4733af95155d04cb9388"
+      "category_id": "9bbeb3037d4e4733af95155d04cb9388",
+      "header_id": null
     },
     {
       "name": "Education",
       "planned_amount": "0.00",
       "actual_amount": "-540.00",
-      "category_id": "9e26764dac3b435889c9a8e04077586e"
+      "category_id": "9e26764dac3b435889c9a8e04077586e",
+      "header_id": null
     },
     {
       "name": "Entertainment",
       "planned_amount": "0",
-      "actual_amount": "-490.95",
-      "category_id": "a20abdde1c1f426aac2977940a1ffcd0"
+      "actual_amount": "-503.15",
+      "category_id": "a20abdde1c1f426aac2977940a1ffcd0",
+      "header_id": null
     },
     {
       "name": "Childcare",
       "planned_amount": "0",
       "actual_amount": "-642.20",
-      "category_id": "a944044fe3e346928f1dc8f34dee80ee"
+      "category_id": "a944044fe3e346928f1dc8f34dee80ee",
+      "header_id": "cc97c2e85a854306852704c979dbcadc"
     },
     {
       "name": "Beauty",
       "planned_amount": "0",
       "actual_amount": "-453.80",
-      "category_id": "3e4cbe4cf4cc44b3a950041a83743cfb"
+      "category_id": "3e4cbe4cf4cc44b3a950041a83743cfb",
+      "header_id": null
     },
     {
       "name": "Clothing",
       "planned_amount": "0",
-      "actual_amount": "-352.66",
-      "category_id": "b54107481bab445fac8ac758fec25a7c"
+      "actual_amount": "-387.64",
+      "category_id": "b54107481bab445fac8ac758fec25a7c",
+      "header_id": "30de05b8c4e7446098b2b3629db4ca91"
+    },
+    {
+      "name": "Refund",
+      "planned_amount": "0",
+      "actual_amount": "184.85",
+      "category_id": "415e2bc11c5f4e22b6dce6f2fb0d5b44",
+      "header_id": "5ce04afbef0245858d1e5d3afc523321"
     }
   ],
   "transactions": [
@@ -390,7 +419,7 @@
       "description": "STICHTING DERDENGELDEN BUCKAROO | Refund Nolten/24424 BuckID: P5G0X4RYCLWH76ISXYHB | P5G0X4RYCLWH76ISXYHB",
       "amount": "184.85",
       "occurred_on": "2025-09-02",
-      "category_id": null,
+      "category_id": "415e2bc11c5f4e22b6dce6f2fb0d5b44",
       "transaction_id": "P5G0X4RYCLWH76ISXYHB",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -866,7 +895,7 @@
       "description": "PAY.nl*De Boetzelaer | MONSTER, 2681PM, NLD, 16:50 | . Pas: 6xxxx3025 pasnr. 021 Terminal: 991MK5. Appr Cd: 209H06 Apple Pay | 673001101059",
       "amount": "-6.00",
       "occurred_on": "2025-09-09",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "673001101059",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -950,7 +979,7 @@
       "description": "BCK*SHELL HOUTRUST | S-GRAVENHAGE, 2566GK, NLD, 17:41 | . Pas: 6xxxx3033 pasnr. 031 Terminal: 02154311. Appr Cd: 841D64 Apple Pay | 091000054332",
       "amount": "-10.98",
       "occurred_on": "2025-09-10",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "091000054332",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1314,7 +1343,7 @@
       "description": "BCK*Starb Shell Bospoo | LEIDERDORP, 2353ZW, NLD, 18:14 | . Pas: 6xxxx3033 pasnr. 031 Terminal: CT638851. Appr Cd: 711H54 Apple Pay | 091400373869",
       "amount": "-9.50",
       "occurred_on": "2025-09-14",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "091400373869",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1328,7 +1357,7 @@
       "description": "BCK*Bospoort Kaba Prt | LEIDERDORP, 2353ZW, NLD, 18:13 | . Pas: 6xxxx3025 pasnr. 021 Terminal: 00015650. Appr Cd: 701J61 Apple Pay | 091400225534",
       "amount": "-1.00",
       "occurred_on": "2025-09-14",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "091400225534",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1342,7 +1371,7 @@
       "description": "BCK*Bospoort Kaba Prt | LEIDERDORP, 2353ZW, NLD, 18:14 | . Pas: 6xxxx3025 pasnr. 021 Terminal: 00015650. Appr Cd: 721B88 Apple Pay | 091400225710",
       "amount": "-1.00",
       "occurred_on": "2025-09-14",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "091400225710",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1356,7 +1385,7 @@
       "description": "NATIONALE-NED SCHADEVERZ MIJNV | Rechtsbijstandverzekering, Polisnr.: 2693714001, Periode: 14-09-2025 - 13-10-2025 | 18098466",
       "amount": "-35.09",
       "occurred_on": "2025-09-15",
-      "category_id": null,
+      "category_id": "43524b51f8624801a74671ecd3a2ccd0",
       "transaction_id": "18098466",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1468,7 +1497,7 @@
       "description": "Stichting H.S.U. | 'S-GRAVENHAGE, 2516BB, NLD, 14:01 | . Pas: 6xxxx3025 pasnr. 021 Terminal: Q5R0FH. Appr Cd: 185C05 Apple Pay | 673001103801",
       "amount": "-12.00",
       "occurred_on": "2025-09-16",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "673001103801",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1482,7 +1511,7 @@
       "description": "Stichting H.S.U. | 'S-GRAVENHAGE, 2516BB, NLD, 14:07 | . Pas: 6xxxx3025 pasnr. 021 Terminal: Q5R0FH. Appr Cd: 236A86 Apple Pay | 673001102994",
       "amount": "-6.00",
       "occurred_on": "2025-09-16",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "673001102994",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1496,7 +1525,7 @@
       "description": "Stichting H.S.U. | 'S-GRAVENHAGE, 2516BB, NLD, 14:42 | . Pas: 6xxxx3025 pasnr. 021 Terminal: Q5R0FH. Appr Cd: 021D57 | 673001103805",
       "amount": "-13.25",
       "occurred_on": "2025-09-16",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "673001103805",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1538,7 +1567,7 @@
       "description": "NYX*VendingWork | Groningen, 9723 BH, NLD, 16:17 | . Pas: 6xxxx3033 pasnr. 031 Terminal: NX239668. Appr Cd: 168E67 Apple Pay | 525956691476",
       "amount": "-1.45",
       "occurred_on": "2025-09-16",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "525956691476",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1580,7 +1609,7 @@
       "description": "bol.com | P1591354073 7051555717092615 bol.com A00092LNEL xui-17085362 | 17-09-2025 23:41 7051555717092615",
       "amount": "-10.95",
       "occurred_on": "2025-09-17",
-      "category_id": null,
+      "category_id": "ad417b90ff0d4d8fbf9a09f845d6da80",
       "transaction_id": "17-09-2025 23:41 7051555717092615",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1608,7 +1637,7 @@
       "description": "Theater de Naald | NAALDWIJK, 2671GW, NLD, 20:44 | . Pas: 6xxxx3025 pasnr. 021 Terminal: D3GRM9. Appr Cd: 882B84 Apple Pay | 673001106076",
       "amount": "-12.20",
       "occurred_on": "2025-09-18",
-      "category_id": null,
+      "category_id": "a20abdde1c1f426aac2977940a1ffcd0",
       "transaction_id": "673001106076",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1622,7 +1651,7 @@
       "description": "CIGNA INTERNATIONAL HEALTH | SETTLEMENT DD18/09/25 REIMBURSEMENT OF MEDICAL EXPENSES O/REF: 014 65593 | 18231528",
       "amount": "154.98",
       "occurred_on": "2025-09-19",
-      "category_id": null,
+      "category_id": "e2241fab2eb243c2bd8f5235338c3326",
       "transaction_id": "18231528",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1636,7 +1665,7 @@
       "description": "Intention | P25915841 7020114828907752 Proforma P25915841 xui-97152761 | 19-09-2025 14:13 7020114828907752",
       "amount": "-9.67",
       "occurred_on": "2025-09-19",
-      "category_id": null,
+      "category_id": "44394a6f3f3340beaffc21d8b0c95677",
       "transaction_id": "19-09-2025 14:13 7020114828907752",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1664,7 +1693,7 @@
       "description": "Vishandel Ockenburg | 'S-GRAVENHAGE, 2554BZ, NLD, 18:22 | . Pas: 6xxxx3025 pasnr. 021 Terminal: 842M59. Appr Cd: 282E85 Apple Pay | 673001103840",
       "amount": "-27.45",
       "occurred_on": "2025-09-19",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "673001103840",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1720,7 +1749,7 @@
       "description": "NL0111 - H&M | NAALDWIJK, 2671NX, NLD, 20:47 | . Pas: 6xxxx3025 pasnr. 021 Terminal: N200GB. Appr Cd: 110B44 Apple Pay | 673001102948",
       "amount": "-34.98",
       "occurred_on": "2025-09-19",
-      "category_id": null,
+      "category_id": "b54107481bab445fac8ac758fec25a7c",
       "transaction_id": "673001102948",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -1748,7 +1777,7 @@
       "description": "Haje de Lepelaar | Lelystad, 8218 PX, NLD, 15:13 | . Pas: 6xxxx3025 pasnr. 021 Terminal: PTR06605. Appr Cd: 262H72 Apple Pay | 526313426607",
       "amount": "-0.80",
       "occurred_on": "2025-09-20",
-      "category_id": null,
+      "category_id": "f016f6d0c569459ebf10dea301ef21d8",
       "transaction_id": "526313426607",
       "account_id": "NL94RABO0338195653",
       "account_name": null,
@@ -5509,6 +5538,24 @@
       "company": "APPLE.COM/BILL          HOLLYHILL",
       "is_internal_transfer": false,
       "transfer_partner_id": null
+    }
+  ],
+  "category_headers": [
+    {
+      "name": "Shopping",
+      "header_id": "30de05b8c4e7446098b2b3629db4ca91"
+    },
+    {
+      "name": "Income",
+      "header_id": "5ce04afbef0245858d1e5d3afc523321"
+    },
+    {
+      "name": "Recurring Costs",
+      "header_id": "cc97c2e85a854306852704c979dbcadc"
+    },
+    {
+      "name": "Food",
+      "header_id": "5add4f6a858b41379027389fa010f830"
     }
   ]
 }

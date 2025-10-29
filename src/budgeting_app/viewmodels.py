@@ -14,7 +14,7 @@ from .csv_importer import (
     read_credit_card_statement,
     read_transactions_from_csv,
 )
-from .models import BudgetLedger, BudgetCategory, Transaction
+from .models import BudgetLedger, BudgetCategory, CategoryHeader, Transaction
 from .storage import load_ledger, save_ledger
 
 ChangeListener = Callable[[BudgetLedger], None]
@@ -95,6 +95,25 @@ class BudgetViewModel:
         self.ledger.remove_category(category_id)
         self._notify()
 
+    def add_header(self, name: str) -> CategoryHeader:
+        header = self.ledger.add_header(name)
+        self._notify()
+        return header
+
+    def update_header(self, header_id: str, *, name: str | None = None) -> CategoryHeader:
+        header = self.ledger.update_header(header_id, name=name)
+        self._notify()
+        return header
+
+    def delete_header(self, header_id: str) -> None:
+        self.ledger.remove_header(header_id)
+        self._notify()
+
+    def set_category_header(self, category_id: str, header_id: str | None) -> BudgetCategory:
+        category = self.ledger.set_category_header(category_id, header_id)
+        self._notify()
+        return category
+
     def categories_for_table(self) -> Iterable[dict[str, str]]:
         """Return category data shaped for display tables."""
         for category in self.ledger.categories.values():
@@ -105,6 +124,70 @@ class BudgetViewModel:
                 "actual": f"{category.actual_amount:.2f}",
                 "difference": f"{(category.planned_amount - category.actual_amount):.2f}",
             }
+
+    def category_hierarchy_for_table(self) -> list[dict[str, str]]:
+        """Return hierarchical category rows including headers for table display."""
+
+        ledger = self.ledger
+        rows: list[dict[str, str]] = []
+        categories = list(ledger.categories.values())
+        categories_by_header: dict[str, list[BudgetCategory]] = {}
+        for category in categories:
+            if category.header_id:
+                categories_by_header.setdefault(category.header_id, []).append(category)
+
+        for header in ledger.category_headers.values():
+            attached = categories_by_header.get(header.header_id, [])
+            planned_total = sum((cat.planned_amount for cat in attached), Decimal("0.00"))
+            actual_total = sum((cat.actual_amount for cat in attached), Decimal("0.00"))
+            rows.append(
+                {
+                    "row_id": f"header:{header.header_id}",
+                    "row_type": "header",
+                    "header_id": header.header_id,
+                    "name": header.name,
+                    "planned": f"{planned_total:.2f}",
+                    "actual": f"{actual_total:.2f}",
+                    "difference": f"{(planned_total - actual_total):.2f}",
+                    "parent": "",
+                    "open": True,
+                }
+            )
+            for category in attached:
+                rows.append(
+                    {
+                        "row_id": category.category_id,
+                        "row_type": "category",
+                        "category_id": category.category_id,
+                        "header_id": header.header_id,
+                        "name": category.name,
+                        "planned": f"{category.planned_amount:.2f}",
+                        "actual": f"{category.actual_amount:.2f}",
+                        "difference": f"{(category.planned_amount - category.actual_amount):.2f}",
+                        "parent": f"header:{header.header_id}",
+                        "open": True,
+                    }
+                )
+
+        for category in categories:
+            if category.header_id:
+                continue
+            rows.append(
+                {
+                    "row_id": category.category_id,
+                    "row_type": "category",
+                    "category_id": category.category_id,
+                    "header_id": None,
+                    "name": category.name,
+                    "planned": f"{category.planned_amount:.2f}",
+                    "actual": f"{category.actual_amount:.2f}",
+                    "difference": f"{(category.planned_amount - category.actual_amount):.2f}",
+                    "parent": "",
+                    "open": True,
+                }
+            )
+
+        return rows
 
     # ------------------------------------------------------------------ #
     # Transaction operations
