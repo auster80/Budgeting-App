@@ -25,9 +25,35 @@ class BudgetApp(tk.Tk):
     def __init__(self, viewmodel: BudgetViewModel) -> None:
         super().__init__()
         self.title("Budgeting App")
-        self.geometry("960x640")
+        self.geometry("1200x720")
         self.resizable(True, True)
         self.viewmodel = viewmodel
+        self.bg_color = "#0b1426"
+        self.card_bg = "#101d32"
+        self.card_border = "#1d304b"
+        self.surface_dark = "#0f1b2d"
+        self.surface_muted = "#152641"
+        self.surface_hover = "#1d3150"
+        self.surface_selected = "#27466d"
+        self.text_color = "#f4f8ff"
+        self.muted_text = "#8ca1c7"
+        self.heading_color = "#d7e3ff"
+        self.status_bg = "#081020"
+        self.disabled_bg = "#1a273d"
+        self.disabled_fg = "#4f607a"
+        self.accent_teal = "#4fd1c5"
+        self.accent_green = "#4ade80"
+        self.accent_red = "#f87171"
+        self.accent_pink = "#f472b6"
+        self.accent_purple = "#c084fc"
+
+        self.configure(bg=self.bg_color)
+        self.option_add("*Font", "Segoe UI 10")
+        self.option_add("*TCombobox*Listbox.background", self.surface_dark)
+        self.option_add("*TCombobox*Listbox.foreground", self.text_color)
+        self.option_add("*TCombobox*Listbox.selectBackground", self.surface_selected)
+        self.option_add("*TCombobox*Listbox.selectForeground", self.text_color)
+        self.option_add("*Entry.insertBackground", self.accent_teal)
         self.category_lookup: dict[str, str] = {}
         self.category_name_by_id: dict[str, str] = {}
         self.category_colors: dict[str, str] = {}
@@ -54,6 +80,11 @@ class BudgetApp(tk.Tk):
         self._suspend_ai_refresh = False
         self._category_chart_window: CategoryChartWindow | None = None
 
+        self.balance_total_var = tk.StringVar(value="0.00")
+        self.income_total_var = tk.StringVar(value="0.00")
+        self.expenses_total_var = tk.StringVar(value="0.00")
+        self.plan_gap_var = tk.StringVar(value="0.00")
+
         self._configure_styles()
         self._build_menu()
         self._build_layout()
@@ -68,82 +99,258 @@ class BudgetApp(tk.Tk):
     def _configure_styles(self) -> None:
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("Card.TLabelframe", padding=12)
-        style.configure("Card.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
-        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"))
+
+        style.configure("TFrame", background=self.bg_color)
+        style.configure("Card.TFrame", background=self.card_bg)
+        style.configure("CardTable.TFrame", background=self.card_bg)
+
+        style.configure(
+            "TLabel",
+            background=self.card_bg,
+            foreground=self.text_color,
+        )
+        style.configure(
+            "Heading.TLabel",
+            background=self.card_bg,
+            foreground=self.heading_color,
+            font=("Segoe UI", 14, "bold"),
+        )
+        style.configure(
+            "Subheading.TLabel",
+            background=self.card_bg,
+            foreground=self.muted_text,
+            font=("Segoe UI", 10),
+        )
+
+        style.configure(
+            "Primary.TButton",
+            background=self.accent_teal,
+            foreground=self.bg_color,
+            padding=(16, 10),
+            borderwidth=0,
+            focusthickness=0,
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "Primary.TButton",
+            background=[("active", "#5fe0d4"), ("pressed", "#44b6ab"), ("disabled", self.disabled_bg)],
+            foreground=[("disabled", self.disabled_fg)],
+        )
+
+        style.configure(
+            "Secondary.TButton",
+            background=self.surface_dark,
+            foreground=self.muted_text,
+            padding=(14, 10),
+            borderwidth=1,
+            focusthickness=0,
+            font=("Segoe UI", 10),
+            relief="flat",
+        )
+        style.map(
+            "Secondary.TButton",
+            background=[("active", self.surface_hover), ("disabled", self.disabled_bg)],
+            foreground=[("disabled", self.disabled_fg)],
+            bordercolor=[("!disabled", self.card_border), ("focus", self.accent_teal)],
+        )
+
+        style.configure(
+            "Danger.TButton",
+            background=self.accent_red,
+            foreground=self.bg_color,
+            padding=(16, 10),
+            borderwidth=0,
+            focusthickness=0,
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "Danger.TButton",
+            background=[("active", "#fb6b6b"), ("pressed", "#dd4d4d"), ("disabled", self.disabled_bg)],
+            foreground=[("disabled", self.disabled_fg)],
+        )
+
+        style.configure(
+            "Card.TCombobox",
+            fieldbackground=self.surface_dark,
+            background=self.surface_dark,
+            foreground=self.text_color,
+            bordercolor=self.card_border,
+            lightcolor=self.card_border,
+            darkcolor=self.card_border,
+            arrowcolor=self.text_color,
+            padding=(10, 6),
+        )
+        style.map(
+            "Card.TCombobox",
+            fieldbackground=[("readonly", self.surface_dark)],
+            background=[("readonly", self.surface_dark)],
+            foreground=[("disabled", self.disabled_fg)],
+        )
+
+        style.configure(
+            "TEntry",
+            fieldbackground=self.surface_dark,
+            foreground=self.text_color,
+            bordercolor=self.card_border,
+            darkcolor=self.card_border,
+            lightcolor=self.card_border,
+            insertcolor=self.accent_teal,
+            padding=(8, 6),
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("!disabled", self.surface_dark)],
+            bordercolor=[("focus", self.accent_teal)],
+        )
+
+        style.configure(
+            "Budget.Treeview",
+            background=self.surface_dark,
+            foreground=self.text_color,
+            fieldbackground=self.surface_dark,
+            bordercolor=self.card_border,
+            borderwidth=0,
+            rowheight=32,
+            font=("Segoe UI", 10),
+        )
+        style.map(
+            "Budget.Treeview",
+            background=[("selected", self.surface_selected)],
+            foreground=[("selected", self.text_color)],
+        )
+        style.configure(
+            "Budget.Treeview.Heading",
+            background=self.surface_dark,
+            foreground=self.muted_text,
+            bordercolor=self.card_border,
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+        )
+        style.map(
+            "Budget.Treeview.Heading",
+            background=[("active", self.surface_dark)],
+            foreground=[("active", self.heading_color)],
+        )
+
+        style.configure(
+            "Treeview.Heading",
+            background=self.surface_dark,
+            foreground=self.muted_text,
+            bordercolor=self.card_border,
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("active", self.surface_dark)],
+            foreground=[("active", self.heading_color)],
+        )
+
+        style.configure(
+            "Vertical.TScrollbar",
+            background=self.surface_dark,
+            troughcolor=self.card_bg,
+            bordercolor=self.card_border,
+            lightcolor=self.card_border,
+            darkcolor=self.card_border,
+            arrowcolor=self.text_color,
+        )
+
+        style.configure(
+            "Horizontal.TScrollbar",
+            background=self.surface_dark,
+            troughcolor=self.card_bg,
+        )
 
     def _build_layout(self) -> None:
-        container = ttk.Frame(self, padding=12)
-        container.pack(fill="both", expand=True, padx=12, pady=8)
-
+        container = tk.Frame(self, bg=self.bg_color)
+        container.pack(fill="both", expand=True, padx=32, pady=(32, 16))
         container.columnconfigure(0, weight=1)
-        container.columnconfigure(1, weight=1)
         container.rowconfigure(1, weight=1)
 
         self._build_totals_section(container)
-        self._build_categories_section(container)
-        self._build_transactions_section(container)
 
-    def _build_totals_section(self, parent: ttk.Frame) -> None:
-        totals_frame = ttk.Frame(parent)
-        totals_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        totals_frame.columnconfigure(0, weight=1)
-        totals_frame.columnconfigure(1, weight=1)
-        totals_frame.columnconfigure(2, weight=1)
+        content = tk.Frame(container, bg=self.bg_color)
+        content.grid(row=1, column=0, sticky="nsew")
+        content.columnconfigure(0, weight=4)
+        content.columnconfigure(1, weight=6)
+        content.rowconfigure(0, weight=1)
 
-        self.planned_total_var = tk.StringVar(value="0.00")
-        self.actual_total_var = tk.StringVar(value="0.00")
-        self.remaining_total_var = tk.StringVar(value="0.00")
+        self._build_categories_section(content)
+        self._build_transactions_section(content)
 
-        for idx, (label, var) in enumerate(
-            [
-                ("Planned Total:", self.planned_total_var),
-                ("Actual Total:", self.actual_total_var),
-                ("Remaining:", self.remaining_total_var),
-            ]
-        ):
-            ttk.Label(totals_frame, text=label, font=("Segoe UI", 10, "bold")).grid(
-                row=0, column=2 * idx, sticky="w"
-            )
-            ttk.Label(totals_frame, textvariable=var, font=("Consolas", 12)).grid(
-                row=0, column=2 * idx + 1, sticky="w"
-            )
+        status_bar = tk.Label(
+            self,
+            textvariable=self.status_var,
+            anchor="w",
+            bg=self.status_bg,
+            fg=self.muted_text,
+            font=("Segoe UI", 9),
+            padx=16,
+            pady=8,
+        )
+        status_bar.pack(fill="x", side="bottom")
+
+    def _build_totals_section(self, parent: tk.Widget) -> None:
+        totals = tk.Frame(parent, bg=self.bg_color)
+        totals.grid(row=0, column=0, sticky="ew", pady=(0, 24))
+        totals.columnconfigure(0, weight=1)
+        totals.columnconfigure(1, weight=1)
+        totals.columnconfigure(2, weight=1)
+        totals.columnconfigure(3, weight=1)
+        totals.columnconfigure(4, weight=0)
+
+        metrics = [
+            ("Total Balance", self.balance_total_var, self.accent_teal),
+            ("Income", self.income_total_var, self.accent_green),
+            ("Expenses", self.expenses_total_var, self.accent_red),
+            ("Plan Gap", self.plan_gap_var, self.accent_purple),
+        ]
+
+        for index, (label, variable, accent) in enumerate(metrics):
+            card = self._create_metric_card(totals, label, variable, accent)
+            card.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 16, 16))
+
+        actions = tk.Frame(totals, bg=self.bg_color)
+        actions.grid(row=0, column=len(metrics), sticky="e")
 
         ttk.Button(
-            totals_frame,
+            actions,
             text="Save Budget",
             command=self._save_budget,
             style="Primary.TButton",
-        ).grid(row=0, column=6, sticky="e")
+        ).pack(side="right")
 
-    def _build_categories_section(self, parent: ttk.Frame) -> None:
-        categories_frame = ttk.Labelframe(
+    def _build_categories_section(self, parent: tk.Widget) -> None:
+        card, body = self._create_section_card(
             parent,
-            text="Budget Categories",
-            style="Card.TLabelframe",
+            "Categories",
+            row=0,
+            column=0,
+            padx=(0, 24),
         )
-        categories_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
-        categories_frame.columnconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
 
-        form = ttk.Frame(categories_frame)
-        form.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        form = tk.Frame(body, bg=self.card_bg)
+        form.grid(row=0, column=0, sticky="ew", pady=(0, 16))
         form.columnconfigure(0, weight=1)
         form.columnconfigure(1, weight=1)
 
         self.category_name_input = LabeledEntry(form, label="Name")
-        self.category_name_input.grid(row=0, column=0, sticky="ew")
+        self.category_name_input.grid(row=0, column=0, sticky="ew", padx=(0, 12))
         self.category_plan_input = CurrencyEntry(form, label="Planned Amount")
-        self.category_plan_input.grid(row=0, column=1, sticky="ew")
+        self.category_plan_input.grid(row=0, column=1, sticky="ew", padx=(0, 12))
 
         ttk.Button(
             form,
             text="Add Category",
             style="Primary.TButton",
             command=self._handle_add_category,
-        ).grid(row=0, column=2, padx=(12, 0), sticky="ew")
+        ).grid(row=0, column=2, sticky="ew")
+        form.columnconfigure(2, weight=0)
 
         self.category_table = Table(
-            categories_frame,
+            body,
             columns=("name", "planned", "actual", "difference"),
             headings={
                 "name": "Name",
@@ -151,9 +358,11 @@ class BudgetApp(tk.Tk):
                 "actual": "Actual",
                 "difference": "Difference",
             },
+            style="CardTable.TFrame",
+            tree_style="Budget.Treeview",
         )
         self.category_table.grid(row=1, column=0, sticky="nsew")
-        categories_frame.rowconfigure(1, weight=1)
+        self.category_table.tree.configure(style="Budget.Treeview")
         self.category_table.tree.bind("<<TreeviewSelect>>", self._handle_category_selection)
         self.category_table.tree.bind("<Button-3>", self._show_category_context_menu)
         self.category_table.tree.bind(
@@ -166,62 +375,88 @@ class BudgetApp(tk.Tk):
             command=self._handle_edit_category,
         )
 
+        actions = tk.Frame(body, bg=self.card_bg)
+        actions.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+
         ttk.Button(
-            categories_frame,
+            actions,
             text="Delete Selected Category",
             command=self._handle_delete_category,
-        ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+            style="Danger.TButton",
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
         ttk.Button(
-            categories_frame,
+            actions,
             text="Visualise Actuals...",
             command=self._open_category_visualisation,
-        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
+            style="Secondary.TButton",
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
-    def _build_transactions_section(self, parent: ttk.Frame) -> None:
-        transactions_frame = ttk.Labelframe(parent, text="Transactions", style="Card.TLabelframe")
-        transactions_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
-        transactions_frame.columnconfigure(0, weight=1)
+    def _build_transactions_section(self, parent: tk.Widget) -> None:
+        card, body = self._create_section_card(
+            parent,
+            "Transactions",
+            row=0,
+            column=1,
+            accent_color=self.accent_pink,
+        )
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
 
-        form = ttk.Frame(transactions_frame)
-        form.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        for idx in range(6):
+        form = tk.Frame(body, bg=self.card_bg)
+        form.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        for idx in range(5):
             form.columnconfigure(idx, weight=1)
 
         self.txn_description_input = LabeledEntry(form, label="Description")
-        self.txn_description_input.grid(row=0, column=0, sticky="ew")
+        self.txn_description_input.grid(row=0, column=0, sticky="ew", padx=(0, 12))
 
         self.txn_amount_input = CurrencyEntry(form, label="Amount")
-        self.txn_amount_input.grid(row=0, column=1, sticky="ew")
+        self.txn_amount_input.grid(row=0, column=1, sticky="ew", padx=(0, 12))
 
         self.txn_date_input = LabeledEntry(form, label="Date (YYYY-MM-DD)", width=14)
-        self.txn_date_input.grid(row=0, column=2, sticky="ew")
+        self.txn_date_input.grid(row=0, column=2, sticky="ew", padx=(0, 12))
 
-        ttk.Label(form, text="Category").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.txn_category_input = ttk.Combobox(form, state="readonly")
-        self.txn_category_input.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        tk.Label(
+            form,
+            text="Category",
+            bg=self.card_bg,
+            fg=self.muted_text,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=1, column=0, sticky="w", pady=(8, 4))
+
+        self.txn_category_input = ttk.Combobox(
+            form,
+            state="readonly",
+            style="Card.TCombobox",
+        )
+        self.txn_category_input.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 0), padx=(0, 12))
 
         ttk.Button(
             form,
             text="Add Transaction",
             style="Primary.TButton",
             command=self._handle_add_transaction,
-        ).grid(row=1, column=2, sticky="ew", padx=(12, 0), pady=(6, 0))
+        ).grid(row=1, column=2, sticky="ew")
 
         ttk.Button(
             form,
             text="Import CSV...",
             command=self._handle_import_csv,
-        ).grid(row=1, column=3, sticky="ew", padx=(12, 0), pady=(6, 0))
+            style="Secondary.TButton",
+        ).grid(row=1, column=3, sticky="ew", padx=(12, 0))
 
         ttk.Button(
             form,
             text="Import Credit Card...",
             command=self._handle_import_credit_card_statement,
-        ).grid(row=1, column=4, sticky="ew", padx=(12, 0), pady=(6, 0))
+            style="Secondary.TButton",
+        ).grid(row=1, column=4, sticky="ew", padx=(12, 0))
 
         self.transaction_table = Table(
-            transactions_frame,
+            body,
             columns=(
                 "occurred_on",
                 "description",
@@ -244,87 +479,217 @@ class BudgetApp(tk.Tk):
             },
             selectmode="extended",
             column_options={
-                "amount": {"width": 100, "anchor": "e", "stretch": False},
-                "apply": {"width": 60, "anchor": "center", "stretch": False},
-                "suggestion": {"width": 160},
+                "amount": {"width": 120, "anchor": "e", "stretch": False},
+                "apply": {"width": 70, "anchor": "center", "stretch": False},
+                "suggestion": {"width": 180},
             },
+            style="CardTable.TFrame",
+            tree_style="Budget.Treeview",
         )
-        self.transaction_table.grid(row=2, column=0, sticky="nsew")
+        self.transaction_table.grid(row=1, column=0, sticky="nsew")
         self.transaction_table.bind_yview(self._on_transaction_viewport_changed)
         self.transaction_table.tree.bind("<ButtonRelease-1>", self._handle_transaction_click)
         self.transaction_table.tree.bind(
             "<<TreeviewSelect>>", self._update_transaction_actions_state
         )
-        transactions_frame.rowconfigure(2, weight=1)
 
-        assign_frame = ttk.Frame(transactions_frame)
-        assign_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        assign_frame = tk.Frame(body, bg=self.card_bg)
+        assign_frame.grid(row=2, column=0, sticky="ew", pady=(16, 0))
         assign_frame.columnconfigure(1, weight=1)
-        ttk.Label(assign_frame, text="Assign category to selected:").grid(row=0, column=0, sticky="w")
-        self.assign_category_input = ttk.Combobox(assign_frame, state="readonly")
-        self.assign_category_input.grid(row=0, column=1, sticky="ew", padx=(6, 6))
+
+        tk.Label(
+            assign_frame,
+            text="Assign category to selected",
+            bg=self.card_bg,
+            fg=self.muted_text,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        self.assign_category_input = ttk.Combobox(
+            assign_frame,
+            state="readonly",
+            style="Card.TCombobox",
+        )
+        self.assign_category_input.grid(row=0, column=1, sticky="ew", padx=(12, 12))
         ttk.Button(
             assign_frame,
             text="Assign",
             command=self._handle_assign_transaction_category,
-        ).grid(row=0, column=2)
+            style="Primary.TButton",
+        ).grid(row=0, column=2, sticky="ew")
+
+        controls = tk.Frame(assign_frame, bg=self.card_bg)
+        controls.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        controls.columnconfigure(0, weight=1)
+        controls.columnconfigure(1, weight=1)
+        controls.columnconfigure(2, weight=1)
+        controls.columnconfigure(3, weight=1)
 
         self.ai_start_button = ttk.Button(
-            assign_frame,
+            controls,
             text="Start AI Categorisation",
             command=self._start_ai_classification,
+            style="Secondary.TButton",
         )
-        self.ai_start_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.ai_start_button.grid(row=0, column=0, columnspan=2, sticky="ew", padx=(0, 8))
 
         self.ai_stop_button = ttk.Button(
-            assign_frame,
+            controls,
             text="Stop AI Categorisation",
             command=self._stop_ai_classification,
             state="disabled",
+            style="Secondary.TButton",
         )
-        self.ai_stop_button.grid(row=1, column=2, sticky="ew", pady=(6, 0))
+        self.ai_stop_button.grid(row=0, column=2, sticky="ew", padx=8)
 
         self.search_company_button = ttk.Button(
-            assign_frame,
+            controls,
             text="Search Company Online",
             command=self._open_company_search,
             state="disabled",
+            style="Secondary.TButton",
         )
-        self.search_company_button.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.search_company_button.grid(row=0, column=3, sticky="ew")
 
         self.ai_log_button = ttk.Button(
             assign_frame,
             text="Show AI Log",
             command=self._toggle_ai_log,
+            style="Secondary.TButton",
         )
-        self.ai_log_button.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.ai_log_button.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
-        self.ai_log_frame = ttk.Labelframe(
-            transactions_frame,
-            text="AI Classification Log",
-            style="Card.TLabelframe",
-        )
-        self.ai_log_frame.grid(row=4, column=0, sticky="nsew", pady=(6, 0))
+        self.ai_log_frame = tk.Frame(body, bg=self.surface_dark, highlightbackground=self.card_border, highlightthickness=1)
+        self.ai_log_frame.grid(row=3, column=0, sticky="nsew", pady=(16, 0))
         self.ai_log_frame.columnconfigure(0, weight=1)
+        self.ai_log_frame.rowconfigure(1, weight=1)
+
+        header = tk.Frame(self.ai_log_frame, bg=self.surface_dark)
+        header.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
+        tk.Label(
+            header,
+            text="AI Classification Log",
+            bg=self.surface_dark,
+            fg=self.heading_color,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(side="left", anchor="w")
+
         self.ai_log_text = scrolledtext.ScrolledText(
             self.ai_log_frame,
-            height=10,
+            height=8,
             wrap="word",
             state="disabled",
             font=("Consolas", 10),
+            bg=self.surface_muted,
+            fg=self.text_color,
+            insertbackground=self.accent_teal,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.card_border,
+            highlightcolor=self.accent_teal,
         )
-        self.ai_log_text.grid(row=0, column=0, sticky="nsew")
-        self.ai_log_frame.rowconfigure(0, weight=1)
+        self.ai_log_text.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
         self.ai_log_frame.grid_remove()
 
         ttk.Button(
-            transactions_frame,
+            body,
             text="Delete Selected Transaction",
             command=self._handle_delete_transaction,
-        ).grid(row=5, column=0, sticky="ew", pady=(6, 0))
+            style="Danger.TButton",
+        ).grid(row=4, column=0, sticky="ew", pady=(16, 0))
 
-        status_bar = ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(12, 4))
-        status_bar.pack(fill="x", side="bottom")
+    def _create_section_card(
+        self,
+        parent: tk.Widget,
+        title: str,
+        *,
+        row: int,
+        column: int,
+        columnspan: int = 1,
+        padx: tuple[int, int] | int = 0,
+        pady: tuple[int, int] | int = 0,
+        accent_color: str | None = None,
+    ) -> tuple[tk.Frame, tk.Frame]:
+        accent = accent_color or self.accent_teal
+        card = tk.Frame(
+            parent,
+            bg=self.card_bg,
+            highlightbackground=self.card_border,
+            highlightthickness=1,
+            bd=0,
+        )
+        card.grid(row=row, column=column, columnspan=columnspan, sticky="nsew", padx=padx, pady=pady)
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(2, weight=1)
+
+        accent_bar = tk.Frame(card, bg=accent, height=3)
+        accent_bar.grid(row=0, column=0, sticky="ew")
+
+        header = tk.Frame(card, bg=self.card_bg)
+        header.grid(row=1, column=0, sticky="ew", padx=24, pady=(18, 6))
+        tk.Label(
+            header,
+            text=title,
+            bg=self.card_bg,
+            fg=self.heading_color,
+            font=("Segoe UI", 14, "bold"),
+        ).pack(side="left", anchor="w")
+
+        body = tk.Frame(card, bg=self.card_bg)
+        body.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 24))
+        body.grid_columnconfigure(0, weight=1)
+
+        return card, body
+
+    def _create_metric_card(
+        self,
+        parent: tk.Widget,
+        title: str,
+        variable: tk.StringVar,
+        accent_color: str,
+    ) -> tk.Frame:
+        card = tk.Frame(
+            parent,
+            bg=self.surface_dark,
+            highlightbackground=self.card_border,
+            highlightthickness=1,
+            bd=0,
+        )
+        card.grid_columnconfigure(0, weight=1)
+
+        accent_bar = tk.Frame(card, bg=accent_color, height=3)
+        accent_bar.grid(row=0, column=0, sticky="ew")
+
+        content = tk.Frame(card, bg=self.surface_dark)
+        content.grid(row=1, column=0, sticky="nsew", padx=20, pady=16)
+
+        tk.Label(
+            content,
+            text=title,
+            bg=self.surface_dark,
+            fg=self.muted_text,
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            content,
+            textvariable=variable,
+            bg=self.surface_dark,
+            fg=accent_color,
+            font=("Segoe UI", 24, "bold"),
+        ).pack(anchor="w", pady=(6, 0))
+        tk.Label(
+            content,
+            text="This month",
+            bg=self.surface_dark,
+            fg=self.muted_text,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(4, 0))
+
+        return card
+
+    @staticmethod
+    def _format_currency(value: float) -> str:
+        return f"{value:,.2f}"
 
     # ------------------------------------------------------------------ #
     # Event handlers
@@ -708,9 +1073,15 @@ class BudgetApp(tk.Tk):
 
         planned_total = sum(float(row["planned"]) for row in categories)
         actual_total = sum(float(row["actual"]) for row in categories)
-        self.planned_total_var.set(f"{planned_total:.2f}")
-        self.actual_total_var.set(f"{actual_total:.2f}")
-        self.remaining_total_var.set(f"{(planned_total - actual_total):.2f}")
+        income_total = sum(max(float(row["actual"]), 0.0) for row in categories)
+        expense_total = sum(-min(float(row["actual"]), 0.0) for row in categories)
+        balance = income_total - expense_total
+        plan_gap = planned_total - actual_total
+
+        self.balance_total_var.set(self._format_currency(balance))
+        self.income_total_var.set(self._format_currency(income_total))
+        self.expenses_total_var.set(self._format_currency(expense_total))
+        self.plan_gap_var.set(self._format_currency(plan_gap))
 
         self.category_lookup = {row["name"]: row["category_id"] for row in categories}
         self.category_name_by_id = {row["category_id"]: row["name"] for row in categories}

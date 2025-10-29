@@ -66,13 +66,22 @@ class Table(ttk.Frame):
         headings: dict[str, str],
         selectmode: str = "browse",
         column_options: Mapping[str, Mapping[str, Any]] | None = None,
+        style: str | None = None,
+        tree_style: str | None = None,
     ) -> None:
-        super().__init__(master)
+        frame_kwargs: dict[str, Any] = {}
+        if style:
+            frame_kwargs["style"] = style
+        super().__init__(master, **frame_kwargs)
+        tree_kwargs: dict[str, Any] = {}
+        if tree_style:
+            tree_kwargs["style"] = tree_style
         self.tree = ttk.Treeview(
             self,
             columns=columns,
             show="headings",
             selectmode=selectmode,
+            **tree_kwargs,
         )
         self._yview_callbacks: list[Callable[[], None]] = []
         self._columns = columns
