@@ -579,6 +579,20 @@ class TransactionClassifier:
             return "unknown"
         return parsed.strftime("%a").lower()
 
+    @staticmethod
+    def _display_date(value: str) -> str:
+        if not value:
+            return "-"
+        try:
+            return datetime.fromisoformat(value).strftime("%d-%m-%Y")
+        except ValueError:
+            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y"):
+                try:
+                    return datetime.strptime(value, fmt).strftime("%d-%m-%Y")
+                except ValueError:
+                    continue
+        return value
+
     def _request_embedding(self, text: str) -> Optional[list[float]]:
         if not text:
             return None
@@ -678,7 +692,7 @@ class TransactionClassifier:
             txn_parts.append(f"Account: {account}")
         if transaction.reference:
             txn_parts.append(f"Reference: {transaction.reference}")
-        txn_parts.append(f"Occurred On: {transaction.occurred_on}")
+        txn_parts.append(f"Occurred On: {self._display_date(transaction.occurred_on)}")
         transaction_section = "; ".join(txn_parts)
 
         return (

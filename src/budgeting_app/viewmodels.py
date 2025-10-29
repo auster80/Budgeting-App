@@ -20,6 +20,7 @@ from .storage import load_ledger, save_ledger
 ChangeListener = Callable[[BudgetLedger], None]
 
 UNASSIGNED_CATEGORY_TOKEN = "__UNASSIGNED__"
+_UNSET = object()
 
 
 @dataclass(slots=True)
@@ -251,6 +252,29 @@ class BudgetViewModel:
         self.ledger.detect_internal_transfers()
         self.ledger.recalculate_actuals()
         self._notify()
+
+    def update_transaction(
+        self,
+        transaction_id: str,
+        *,
+        description: str | None = None,
+        amount: str | float | Decimal | None = None,
+        category_id: Optional[str] | object = _UNSET,
+        occurred_on: str | None = None,
+    ) -> Transaction:
+        kwargs: dict[str, object] = {}
+        if description is not None:
+            kwargs["description"] = description
+        if amount is not None:
+            kwargs["amount"] = amount
+        if occurred_on is not None:
+            kwargs["occurred_on"] = occurred_on
+        if category_id is not _UNSET:
+            kwargs["category_id"] = category_id
+        transaction = self.ledger.update_transaction(transaction_id, **kwargs)
+        self._latest_suggestions.pop(transaction_id, None)
+        self._notify()
+        return transaction
 
     def set_transactions_category(
         self, transaction_ids: Iterable[str], category_id: str

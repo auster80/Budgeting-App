@@ -12,6 +12,8 @@ from .text_utils import extract_company_name
 
 getcontext().prec = 28  # Higher precision for money calculations.
 
+_UNSET = object()
+
 
 def _to_decimal(value: float | int | str | Decimal) -> Decimal:
     """Convert user-provided numeric values into a Decimal."""
@@ -263,6 +265,44 @@ class BudgetLedger:
             self.categories[category_id].apply_transaction(transaction)
         if self.detect_internal_transfers():
             self.recalculate_actuals()
+        return transaction
+
+    def update_transaction(
+        self,
+        transaction_id: str,
+        *,
+        description: Optional[str] = None,
+        amount: float | int | str | Decimal | None = None,
+        category_id: Optional[str] | object = _UNSET,
+        occurred_on: date | datetime | str | None = None,
+    ) -> Transaction:
+        """Update mutable fields for an existing transaction."""
+
+        transaction = next(
+            (txn for txn in self.transactions if txn.transaction_id == transaction_id),
+            None,
+        )
+        if not transaction:
+            raise KeyError(f"Unknown transaction id '{transaction_id}'")
+
+        if category_id is not _UNSET:
+            if category_id and category_id not in self.categories:
+                raise KeyError(f"Unknown category id '{category_id}'")
+
+        if description is not None:
+            transaction.description = description
+
+        if amount is not None:
+            transaction.amount = _to_decimal(amount)
+
+        if occurred_on is not None:
+            transaction.occurred_on = _format_date(occurred_on)
+
+        if category_id is not _UNSET:
+            transaction.category_id = category_id  # type: ignore[assignment]
+
+        self.detect_internal_transfers()
+        self.recalculate_actuals()
         return transaction
 
     # ------------------------------------------------------------------ #

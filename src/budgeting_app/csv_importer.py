@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -59,10 +59,118 @@ def _parse_decimal(value: str) -> Decimal:
     return Decimal(normalized)
 
 
-def _parse_credit_card_date(value: str) -> str:
+def _safe_date(year: int, month: int, day: int) -> date | None:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _infer_credit_card_month_first(rows: list[dict[str, str]]) -> bool:
+    day_first_votes = 0
+    month_first_votes = 0
+    ambiguous: list[tuple[date, date]] = []
+    first_values: set[int] = set()
+    second_values: set[int] = set()
+
+    for row in rows:
+        raw = (row.get("Datum") or "").strip()
+        if not raw:
+            continue
+        normalized = raw.replace(".", "-").replace("/", "-")
+        parts = normalized.split("-")
+        if len(parts) != 3 or not parts[2]:
+            continue
+        first_part, second_part, year_part = parts
+
+        try:
+            first_num = int(first_part)
+            second_num = int(second_part)
+        except ValueError:
+            continue
+
+        try:
+            year_num = int(year_part)
+        except ValueError:
+            continue
+        if year_num < 100:
+            year_num += 2000 if year_num < 70 else 1900
+
+        day_first = _safe_date(year_num, second_num, first_num)
+        month_first = _safe_date(year_num, first_num, second_num)
+
+        if day_first and not month_first:
+            day_first_votes += 1
+            continue
+        if month_first and not day_first:
+            month_first_votes += 1
+            continue
+        if day_first and month_first:
+            ambiguous.append((day_first, month_first))
+            first_values.add(first_num)
+            second_values.add(second_num)
+
+    if month_first_votes and not day_first_votes:
+        return True
+    if day_first_votes and not month_first_votes:
+        return False
+
+    if ambiguous:
+        first_constant = len(first_values) == 1
+        second_constant = len(second_values) == 1
+        if first_constant and not second_constant:
+            return True
+        if second_constant and not first_constant:
+            return False
+        day_dates = [d for d, _ in ambiguous]
+        month_dates = [m for _, m in ambiguous]
+        if len(day_dates) > 1 and len(month_dates) > 1:
+            day_range = (max(day_dates) - min(day_dates)).days
+            month_range = (max(month_dates) - min(month_dates)).days
+            if month_range < day_range:
+                return True
+            if day_range < month_range:
+                return False
+
+    return False
+
+
+def _parse_credit_card_date(value: str, *, prefer_month_first: bool | None = None) -> str:
     cleaned = value.strip()
     if not cleaned:
         raise ValueError("Credit card transaction is missing a date")
+
+    normalized = cleaned.replace(".", "-").replace("/", "-")
+    parts = normalized.split("-")
+    if len(parts) == 3 and parts[2]:
+        first, second, year_part = parts
+        try:
+            first_num = int(first)
+            second_num = int(second)
+        except ValueError:
+            first_num = second_num = -1
+
+        try:
+            year_num = int(year_part)
+        except ValueError:
+            year_num = None
+        else:
+            if year_num < 100:
+                year_num += 2000 if year_num < 70 else 1900
+
+        if year_num:
+            if prefer_month_first is True:
+                order = [(first_num, second_num), (second_num, first_num)]
+            elif prefer_month_first is False:
+                order = [(second_num, first_num), (first_num, second_num)]
+            else:
+                order = [(second_num, first_num), (first_num, second_num)]
+
+            for month, day in order:
+                candidate = _safe_date(year_num, month, day)
+                if candidate:
+                    return candidate.isoformat()
+
     for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%m-%d-%Y"):
         try:
             return datetime.strptime(cleaned, fmt).date().isoformat()
@@ -185,13 +293,18 @@ def read_credit_card_statement(path: str | Path) -> List[CSVTransaction]:
             "Credit card CSV is missing required columns: " + ", ".join(missing)
         )
 
+    rows: List[dict[str, str]] = [
+        row for row in reader if any((value or "").strip() for value in row.values())
+    ]
+    prefer_month_first = _infer_credit_card_month_first(rows)
+
     transactions: List[CSVTransaction] = []
-    for row in reader:
-        if not any((value or "").strip() for value in row.values()):
-            continue
+    for row in rows:
         amount = _parse_decimal(row.get("Bedrag", "0"))
         description = row.get("Omschrijving", "").strip() or "Credit card transaction"
-        occurred_on = _parse_credit_card_date(row.get("Datum", ""))
+        occurred_on = _parse_credit_card_date(
+            row.get("Datum", ""), prefer_month_first=prefer_month_first
+        )
         reference = _credit_card_reference(row)
         account_id = _credit_card_account(row)
         account_name = row.get("Kaartnaam", "").strip() or "Credit Card"

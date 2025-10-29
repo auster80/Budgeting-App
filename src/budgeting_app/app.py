@@ -65,6 +65,8 @@ class BudgetApp(tk.Tk):
         self._category_rows_by_id: dict[str, dict[str, Any]] = {}
         self._pending_category_selection: str | None = None
         self._category_drag_data: dict[str, Any] | None = None
+        self._transaction_rows_by_id: dict[str, dict[str, Any]] = {}
+        self._pending_transaction_selection: list[str] | None = None
         self.transaction_filter_var = tk.StringVar(value="All Categories")
         self._transaction_filter_category_id: str | None = None
         self._transaction_filter_options: dict[str, str | None] = {"All Categories": None}
@@ -400,6 +402,11 @@ class BudgetApp(tk.Tk):
             label="Delete",
             command=self._handle_delete_header,
         )
+        self.transaction_context_menu = tk.Menu(self, tearoff=0)
+        self.transaction_context_menu.add_command(
+            label="Edit Transaction...",
+            command=self._handle_edit_transaction,
+        )
 
         actions = tk.Frame(body, bg=self.card_bg)
         actions.grid(row=2, column=0, sticky="ew", pady=(16, 0))
@@ -548,6 +555,8 @@ class BudgetApp(tk.Tk):
         self.transaction_table.tree.bind(
             "<<TreeviewSelect>>", self._update_transaction_actions_state
         )
+        self.transaction_table.tree.bind("<Button-3>", self._show_transaction_context_menu)
+        self.transaction_table.tree.bind("<Control-Button-1>", self._show_transaction_context_menu, add="+")
 
         assign_frame = tk.Frame(body, bg=self.card_bg)
         assign_frame.grid(row=3, column=0, sticky="ew", pady=(16, 0))
@@ -746,6 +755,32 @@ class BudgetApp(tk.Tk):
     @staticmethod
     def _format_currency(value: float) -> str:
         return f"{value:,.2f}"
+
+    @staticmethod
+    def _format_display_date(value: str) -> str:
+        if not value:
+            return ""
+        try:
+            return datetime.fromisoformat(value).strftime("%d-%m-%Y")
+        except ValueError:
+            for fmt in ("%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y"):
+                try:
+                    return datetime.strptime(value, fmt).strftime("%d-%m-%Y")
+                except ValueError:
+                    continue
+        return value
+
+    @staticmethod
+    def _parse_user_date(value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Date is required.")
+        for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(cleaned, fmt).date().isoformat()
+            except ValueError:
+                continue
+        raise ValueError("Date must be in DD-MM-YYYY format.")
 
     # ------------------------------------------------------------------ #
     # Event handlers
@@ -1013,11 +1048,16 @@ class BudgetApp(tk.Tk):
             messagebox.showerror("Unknown Category", "Select a valid category.")
             return
         try:
+            occurred_on_iso = self._parse_user_date(occurred_on)
+        except ValueError as exc:
+            messagebox.showerror("Invalid Date", str(exc))
+            return
+        try:
             self.viewmodel.add_transaction(
                 description=description,
                 amount=amount,
                 category_id=category_id,
-                occurred_on=occurred_on,
+                occurred_on=occurred_on_iso,
             )
             self.txn_description_input.set("")
             self.txn_amount_input.set("")
@@ -1037,6 +1077,220 @@ class BudgetApp(tk.Tk):
         if messagebox.askyesno("Delete Transaction", "Delete the selected transaction?"):
             self.viewmodel.delete_transaction(transaction_id)
             self._set_status("Transaction deleted.")
+
+    def _handle_edit_transaction(self) -> None:
+        tree = self.transaction_table.tree
+        selected = list(tree.selection())
+        if not selected:
+            messagebox.showinfo(
+                "Select Transaction",
+                "Select a transaction to edit.",
+                parent=self,
+            )
+            return
+
+        transactions: list[Transaction] = []
+        for transaction_id in selected:
+            transaction = self._get_transaction_by_id(transaction_id)
+            if not transaction:
+                messagebox.showerror(
+                    "Transaction Missing",
+                    "One of the selected transactions could not be found.",
+                    parent=self,
+                )
+                return
+            transactions.append(transaction)
+
+        def collect(getter: Callable[[Transaction], object]) -> tuple[bool, object]:
+            values = [getter(txn) for txn in transactions]
+            first = values[0]
+            return all(value == first for value in values), first
+
+        desc_identical, desc_value = collect(lambda txn: txn.description)
+        amount_identical, amount_value = collect(lambda txn: f"{txn.amount:.2f}")
+        date_identical, date_value = collect(lambda txn: txn.occurred_on)
+        category_identical, category_value = collect(lambda txn: txn.category_id)
+
+        original_description = str(desc_value) if desc_identical else ""
+        original_amount_decimal = Decimal(str(amount_value)) if amount_identical else None
+        original_date_iso = str(date_value) if date_identical else ""
+        original_category_id = category_value if category_identical else None
+
+        if not any((desc_identical, amount_identical, date_identical, category_identical)):
+            messagebox.showinfo(
+                "Edit Transactions",
+                "The selected transactions do not share any editable fields.",
+                parent=self,
+            )
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Edit Transactions" if len(selected) > 1 else "Edit Transaction")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        container = ttk.Frame(dialog, padding=12)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(1, weight=1)
+
+        ttk.Label(container, text="Description").grid(row=0, column=0, sticky="w")
+        description_input = ttk.Entry(container, width=40)
+        description_input.grid(row=0, column=1, sticky="ew")
+        if desc_identical:
+            description_input.insert(0, original_description)
+        else:
+            description_input.insert(0, "Multiple values")
+            description_input.configure(state="disabled")
+
+        amount_input = CurrencyEntry(container, label="Amount")
+        amount_input.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        if amount_identical:
+            amount_input.set(str(amount_value))
+        else:
+            amount_input.set("")
+            amount_input._entry.configure(state="disabled")
+
+        date_input = LabeledEntry(container, label="Date (DD-MM-YYYY)")
+        date_input.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        if date_identical:
+            date_input.set(self._format_display_date(original_date_iso))
+        else:
+            date_input.set("Multiple values")
+            date_input._entry.configure(state="disabled")
+
+        ttk.Label(container, text="Category").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        category_values = ["Unassigned"] + sorted(self.category_lookup.keys())
+        category_combo = ttk.Combobox(
+            container,
+            state="readonly",
+            values=category_values,
+            style="Card.TCombobox",
+        )
+        category_combo.grid(row=3, column=1, sticky="ew", pady=(8, 0))
+        if category_identical:
+            if original_category_id and original_category_id in self.category_name_by_id:
+                category_combo.set(self.category_name_by_id[original_category_id])
+            else:
+                category_combo.set("Unassigned")
+        else:
+            category_combo.set("Multiple values")
+            category_combo.configure(state="disabled")
+
+        button_frame = ttk.Frame(container)
+        button_frame.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).grid(
+            row=0, column=0, padx=(0, 8)
+        )
+
+        def on_save() -> None:
+            update_kwargs: dict[str, object] = {}
+
+            if desc_identical:
+                description = description_input.get().strip()
+                if not description:
+                    messagebox.showinfo(
+                        "Missing Data",
+                        "Description is required.",
+                        parent=dialog,
+                    )
+                    return
+                if description != original_description:
+                    update_kwargs["description"] = description
+
+            if amount_identical:
+                amount_text = amount_input.get().strip()
+                if not amount_text:
+                    messagebox.showinfo(
+                        "Missing Data",
+                        "Amount is required.",
+                        parent=dialog,
+                    )
+                    return
+                try:
+                    new_amount_decimal = Decimal(amount_text)
+                except Exception:
+                    messagebox.showerror(
+                        "Invalid Amount",
+                        "Amount must be numeric.",
+                        parent=dialog,
+                    )
+                    return
+                if original_amount_decimal is not None and new_amount_decimal != original_amount_decimal:
+                    update_kwargs["amount"] = amount_text
+
+            if date_identical:
+                date_text = date_input.get().strip()
+                if not date_text:
+                    messagebox.showinfo(
+                        "Missing Data",
+                        "Date is required.",
+                        parent=dialog,
+                    )
+                    return
+                try:
+                    occurred_on_iso = self._parse_user_date(date_text)
+                except ValueError as exc:
+                    messagebox.showerror("Invalid Date", str(exc), parent=dialog)
+                    return
+                if occurred_on_iso != original_date_iso:
+                    update_kwargs["occurred_on"] = occurred_on_iso
+
+            if category_identical:
+                category_label = category_combo.get().strip()
+                if not category_label:
+                    messagebox.showinfo(
+                        "Missing Data",
+                        "Category is required.",
+                        parent=dialog,
+                    )
+                    return
+                if category_label == "Unassigned":
+                    new_category_id: str | None = None
+                else:
+                    new_category_id = self.category_lookup.get(category_label)
+                    if not new_category_id:
+                        messagebox.showerror(
+                            "Unknown Category",
+                            "Select a valid category.",
+                            parent=dialog,
+                        )
+                        return
+                if new_category_id != original_category_id:
+                    update_kwargs["category_id"] = new_category_id
+
+            if not update_kwargs:
+                dialog.destroy()
+                self._set_status("No changes made.")
+                return
+
+            self._pending_transaction_selection = selected.copy()
+            try:
+                for transaction_id in selected:
+                    self.viewmodel.update_transaction(transaction_id, **update_kwargs)
+            except Exception as exc:  # noqa: BLE001
+                self._pending_transaction_selection = None
+                messagebox.showerror("Update Failed", str(exc), parent=dialog)
+                return
+
+            dialog.destroy()
+            count = len(selected)
+            if count == 1:
+                desc_text = update_kwargs.get(
+                    "description",
+                    original_description if desc_identical else transactions[0].description,
+                )
+                self._set_status(f"Updated transaction '{desc_text}'.")
+            else:
+                self._set_status(f"Updated {count} transactions.")
+
+        ttk.Button(button_frame, text="Save", command=on_save, style="Primary.TButton").grid(
+            row=0, column=1
+        )
+
+        dialog.bind("<Return>", lambda _event: on_save())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        description_input.focus_set()
 
     def _handle_assign_transaction_category(self) -> None:
         selected = self.transaction_table.tree.selection()
@@ -1144,9 +1398,10 @@ class BudgetApp(tk.Tk):
             lines.append("Preview of new transactions:")
             lines.append("(showing up to 5)")
             for record in preview.new_transactions[:5]:
+                occurred = self._format_display_date(record.occurred_on)
                 amount = f"{record.amount:.2f}"
                 lines.append(
-                    f"- {record.occurred_on} | {amount} | {record.description}"
+                    f"- {occurred} | {amount} | {record.description}"
                 )
             remaining = preview.new_count - min(preview.new_count, 5)
             if remaining > 0:
@@ -1226,10 +1481,10 @@ class BudgetApp(tk.Tk):
             "Amount: {record_amount:.2f}\n\n"
             "Do you want to remove the ledger transaction?"
         ).format(
-            txn_date=transaction.occurred_on,
+            txn_date=self._format_display_date(transaction.occurred_on),
             txn_desc=transaction.description,
             txn_amount=transaction.amount,
-            record_date=record.occurred_on,
+            record_date=self._format_display_date(record.occurred_on),
             record_desc=record.description,
             record_amount=statement_amount,
         )
@@ -1340,6 +1595,18 @@ class BudgetApp(tk.Tk):
                 self.category_table.tree.see(target_id)
             self._pending_category_selection = None
 
+        if self._pending_transaction_selection:
+            valid_ids = [
+                txn_id
+                for txn_id in self._pending_transaction_selection
+                if self.transaction_table.tree.exists(txn_id)
+            ]
+            if valid_ids:
+                self.transaction_table.tree.selection_set(valid_ids)
+                self.transaction_table.tree.focus(valid_ids[0])
+                self.transaction_table.tree.see(valid_ids[0])
+            self._pending_transaction_selection = None
+
         planned_total = sum(float(row["planned"]) for row in categories)
         actual_total = sum(float(row["actual"]) for row in categories)
         income_total = sum(max(float(row["actual"]), 0.0) for row in categories)
@@ -1417,6 +1684,12 @@ class BudgetApp(tk.Tk):
             tags.append("header_row")
         return tuple(tags)
 
+    def _get_transaction_by_id(self, transaction_id: str) -> Transaction | None:
+        for txn in self.viewmodel.ledger.transactions:
+            if txn.transaction_id == transaction_id:
+                return txn
+        return None
+
     def _refresh_transaction_filter_options(self, categories: list[dict[str, str]]) -> None:
         if not hasattr(self, "transaction_filter_combo"):
             return
@@ -1457,8 +1730,18 @@ class BudgetApp(tk.Tk):
                 category_id=self._transaction_filter_category_id
             )
         )
-        self.transaction_table.populate(transactions, key_field="transaction_id")
-        return transactions
+        formatted_rows: list[dict[str, str]] = []
+        for row in transactions:
+            row_copy = dict(row)
+            original_date = row_copy.get("occurred_on", "")
+            row_copy["occurred_on_iso"] = original_date
+            row_copy["occurred_on"] = self._format_display_date(original_date)
+            formatted_rows.append(row_copy)
+        self._transaction_rows_by_id = {
+            row["transaction_id"]: row for row in formatted_rows if row.get("transaction_id")
+        }
+        self.transaction_table.populate(formatted_rows, key_field="transaction_id")
+        return formatted_rows
 
     def _soften_category_color(self, color: str, *, opacity: float = 0.6) -> str:
         """Blend category colour with the table background to mimic transparency."""
@@ -1714,6 +1997,20 @@ class BudgetApp(tk.Tk):
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _show_transaction_context_menu(self, event) -> None:
+        tree = self.transaction_table.tree
+        row_id = tree.identify_row(event.y)
+        if not row_id:
+            tree.selection_remove(tree.selection())
+            return
+        if row_id not in tree.selection():
+            tree.selection_set(row_id)
+        tree.focus(row_id)
+        try:
+            self.transaction_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.transaction_context_menu.grab_release()
 
     def _handle_edit_category(self) -> None:
         selected = self.category_table.tree.selection()

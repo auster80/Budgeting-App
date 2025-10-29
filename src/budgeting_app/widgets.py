@@ -5,6 +5,7 @@ from __future__ import annotations
 import tkinter as tk
 from typing import Any, Callable, Mapping
 
+from datetime import datetime
 from tkinter import ttk
 
 
@@ -240,6 +241,14 @@ class Table(ttk.Frame):
     @staticmethod
     def _sort_key(value: str) -> tuple[int, object]:
         normalized = value.replace(",", "").strip()
+        if not normalized:
+            return (1, "")
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                parsed = datetime.strptime(normalized, fmt)
+                return (0, parsed)
+            except ValueError:
+                continue
         try:
             number = float(normalized)
         except ValueError:
