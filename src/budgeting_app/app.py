@@ -15,7 +15,11 @@ from typing import Any, Callable
 from .ai import ClassificationResult
 from .csv_importer import CSVTransaction
 from .models import Transaction
-from .viewmodels import BudgetViewModel, CSVImportPreview
+from .viewmodels import (
+    BudgetViewModel,
+    CSVImportPreview,
+    UNASSIGNED_CATEGORY_TOKEN,
+)
 from .widgets import CurrencyEntry, LabeledEntry, Table
 
 
@@ -61,6 +65,9 @@ class BudgetApp(tk.Tk):
         self._category_rows_by_id: dict[str, dict[str, Any]] = {}
         self._pending_category_selection: str | None = None
         self._category_drag_data: dict[str, Any] | None = None
+        self.transaction_filter_var = tk.StringVar(value="All Categories")
+        self._transaction_filter_category_id: str | None = None
+        self._transaction_filter_options: dict[str, str | None] = {"All Categories": None}
         self._color_palette = [
             "#4E79A7",
             "#F28E2B",
@@ -430,7 +437,7 @@ class BudgetApp(tk.Tk):
             accent_color=self.accent_pink,
         )
         body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
+        body.rowconfigure(2, weight=1)
 
         form = tk.Frame(body, bg=self.card_bg)
         form.grid(row=0, column=0, sticky="ew", pady=(0, 16))
@@ -482,6 +489,28 @@ class BudgetApp(tk.Tk):
             style="Secondary.TButton",
         ).grid(row=1, column=4, sticky="ew", padx=(12, 0))
 
+        filter_frame = tk.Frame(body, bg=self.card_bg)
+        filter_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        filter_frame.columnconfigure(1, weight=1)
+        tk.Label(
+            filter_frame,
+            text="Filter by Category",
+            bg=self.card_bg,
+            fg=self.muted_text,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        self.transaction_filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.transaction_filter_var,
+            state="readonly",
+            style="Card.TCombobox",
+            values=("All Categories",),
+        )
+        self.transaction_filter_combo.grid(row=0, column=1, sticky="ew", padx=(12, 0))
+        self.transaction_filter_combo.bind(
+            "<<ComboboxSelected>>", self._on_transaction_filter_changed
+        )
+
         self.transaction_table = Table(
             body,
             columns=(
@@ -513,7 +542,7 @@ class BudgetApp(tk.Tk):
             style="CardTable.TFrame",
             tree_style="Budget.Treeview",
         )
-        self.transaction_table.grid(row=1, column=0, sticky="nsew")
+        self.transaction_table.grid(row=2, column=0, sticky="nsew")
         self.transaction_table.bind_yview(self._on_transaction_viewport_changed)
         self.transaction_table.tree.bind("<ButtonRelease-1>", self._handle_transaction_click)
         self.transaction_table.tree.bind(
@@ -521,7 +550,7 @@ class BudgetApp(tk.Tk):
         )
 
         assign_frame = tk.Frame(body, bg=self.card_bg)
-        assign_frame.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        assign_frame.grid(row=3, column=0, sticky="ew", pady=(16, 0))
         assign_frame.columnconfigure(1, weight=1)
 
         tk.Label(
@@ -586,7 +615,7 @@ class BudgetApp(tk.Tk):
         self.ai_log_button.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
         self.ai_log_frame = tk.Frame(body, bg=self.surface_dark, highlightbackground=self.card_border, highlightthickness=1)
-        self.ai_log_frame.grid(row=3, column=0, sticky="nsew", pady=(16, 0))
+        self.ai_log_frame.grid(row=4, column=0, sticky="nsew", pady=(16, 0))
         self.ai_log_frame.columnconfigure(0, weight=1)
         self.ai_log_frame.rowconfigure(1, weight=1)
 
@@ -898,6 +927,20 @@ class BudgetApp(tk.Tk):
             else "Ungrouped"
         )
         self._set_status(f"Moved category '{source_row.get('name', '')}' to {destination}.")
+
+    def _on_transaction_filter_changed(self, _event=None) -> None:
+        selection = self.transaction_filter_var.get()
+        selected_id = self._transaction_filter_options.get(selection, None)
+        self._transaction_filter_category_id = selected_id
+        self._populate_transactions_table()
+        self._apply_ai_suggestions_to_table()
+        self._update_transaction_actions_state()
+        if self.ai_active:
+            self._request_ai_refresh()
+        if selection == "All Categories":
+            self._set_status("Showing all transactions.")
+        else:
+            self._set_status(f"Filtered transactions by '{selection}'.")
 
     def _handle_delete_category(self) -> None:
         tree = self.category_table.tree
@@ -1264,7 +1307,6 @@ class BudgetApp(tk.Tk):
     def _on_data_changed(self, _ledger) -> None:
         categories = list(self.viewmodel.categories_for_table())
         category_rows = list(self.viewmodel.category_hierarchy_for_table())
-        transactions = list(self.viewmodel.transactions_for_table())
 
         self._prune_ai_suggestions()
 
@@ -1285,7 +1327,8 @@ class BudgetApp(tk.Tk):
             key_field="row_id",
             tag_getter=self._get_category_tags,
         )
-        self.transaction_table.populate(transactions, key_field="transaction_id")
+        self._refresh_transaction_filter_options(categories)
+        self._populate_transactions_table()
         self._apply_ai_suggestions_to_table()
         self._apply_category_row_styles()
         self.category_table.tree.tag_configure("header_row", font=("Segoe UI", 10, "bold"))
@@ -1373,6 +1416,49 @@ class BudgetApp(tk.Tk):
         if row.get("row_type") == "header":
             tags.append("header_row")
         return tuple(tags)
+
+    def _refresh_transaction_filter_options(self, categories: list[dict[str, str]]) -> None:
+        if not hasattr(self, "transaction_filter_combo"):
+            return
+
+        options_map: dict[str, str | None] = {"All Categories": None}
+        option_labels: list[str] = ["All Categories"]
+
+        option_labels.append("Unassigned")
+        options_map["Unassigned"] = UNASSIGNED_CATEGORY_TOKEN
+
+        for row in categories:
+            category_id = row.get("category_id")
+            name = row.get("name")
+            if not category_id or not name:
+                continue
+            option_labels.append(name)
+            options_map[name] = category_id
+
+        self._transaction_filter_options = options_map
+        self.transaction_filter_combo.configure(values=option_labels)
+
+        current_id = self._transaction_filter_category_id
+        selected_label = next(
+            (label for label, cid in options_map.items() if cid == current_id),
+            None,
+        )
+        if selected_label is None:
+            selected_label = "All Categories"
+            self._transaction_filter_category_id = None
+        if self.transaction_filter_var.get() != selected_label:
+            self.transaction_filter_var.set(selected_label)
+
+    def _populate_transactions_table(self) -> list[dict[str, str]]:
+        if not hasattr(self, "transaction_table"):
+            return []
+        transactions = list(
+            self.viewmodel.transactions_for_table(
+                category_id=self._transaction_filter_category_id
+            )
+        )
+        self.transaction_table.populate(transactions, key_field="transaction_id")
+        return transactions
 
     def _soften_category_color(self, color: str, *, opacity: float = 0.6) -> str:
         """Blend category colour with the table background to mimic transparency."""

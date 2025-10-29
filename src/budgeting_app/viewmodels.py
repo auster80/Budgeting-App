@@ -19,6 +19,8 @@ from .storage import load_ledger, save_ledger
 
 ChangeListener = Callable[[BudgetLedger], None]
 
+UNASSIGNED_CATEGORY_TOKEN = "__UNASSIGNED__"
+
 
 @dataclass(slots=True)
 class CSVImportPreview:
@@ -283,10 +285,19 @@ class BudgetViewModel:
     def set_transaction_category(self, transaction_id: str, category_id: str) -> None:
         self.set_transactions_category([transaction_id], category_id)
 
-    def transactions_for_table(self) -> Iterable[dict[str, str]]:
+    def transactions_for_table(
+        self, *, category_id: str | None = None
+    ) -> Iterable[dict[str, str]]:
         """Return transaction data shaped for display tables."""
+
         categories = self.ledger.categories
         for txn in self.ledger.transactions:
+            if category_id == UNASSIGNED_CATEGORY_TOKEN:
+                if txn.category_id:
+                    continue
+            elif category_id:
+                if txn.category_id != category_id:
+                    continue
             category_name = (
                 categories.get(txn.category_id, BudgetCategory(name="Unassigned")).name
                 if txn.category_id
